@@ -14,4 +14,3 @@ if (rootElement) {
 } else {
   console.error('[QuickFind:Renderer] Failed to find root element');
 }
-

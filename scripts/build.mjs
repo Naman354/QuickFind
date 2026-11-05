@@ -34,21 +34,25 @@ async function build() {
     console.log('Step 1: Building React Renderer...');
     await runCommand('npx', ['vite', 'build']);
 
-    // 2. Bundle Preload script with Vite (sandboxed, self-contained)
-    console.log('\nStep 2: Bundling Preload script...');
-    await runCommand('npx', ['vite', 'build', '--config', 'vite.config.preload.mts']);
-
-    // 3. Compile Main process with TypeScript
-    console.log('\nStep 3: Compiling Electron Main process...');
+    // 2. Compile Main process with TypeScript (including worker threads)
+    console.log('\nStep 2: Compiling Electron Main process & Worker scripts...');
     await runCommand('npx', ['tsc', '-p', 'tsconfig.node.json']);
+
+    // 3. Bundle Preload script with Vite (sandboxed, self-contained)
+    console.log('\nStep 3: Bundling Preload script...');
+    await runCommand('npx', ['vite', 'build', '--config', 'vite.config.preload.mts']);
 
     // 4. Verify build artifacts
     const mainJs = path.join(rootDir, 'dist/main/index.js');
+    const workerJs = path.join(rootDir, 'dist/main/indexing/worker/indexingWorker.js');
     const preloadJs = path.join(rootDir, 'dist/preload/index.js');
     const rendererHtml = path.join(rootDir, 'dist/renderer/index.html');
 
     if (!fs.existsSync(mainJs)) {
       throw new Error(`Missing main bundle at ${mainJs}`);
+    }
+    if (!fs.existsSync(workerJs)) {
+      throw new Error(`Missing worker script at ${workerJs}`);
     }
     if (!fs.existsSync(preloadJs)) {
       throw new Error(`Missing preload bundle at ${preloadJs}`);
@@ -60,6 +64,7 @@ async function build() {
     console.log('\n✅ QuickFind build completed successfully!');
     console.log('Artifacts:');
     console.log(` - Main:     dist/main/index.js`);
+    console.log(` - Worker:   dist/main/indexing/worker/indexingWorker.js`);
     console.log(` - Preload:  dist/preload/index.js`);
     console.log(` - Renderer: dist/renderer/index.html`);
   } catch (error) {

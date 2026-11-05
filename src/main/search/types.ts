@@ -42,4 +42,3 @@ export interface ISearchEngine {
   search(query: SearchQuery): Promise<SearchResults>;
   dispose(): Promise<void>;
 }
-

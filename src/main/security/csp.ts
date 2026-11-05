@@ -36,4 +36,3 @@ export function setupContentSecurityPolicy(isDev: boolean): void {
     });
   });
 }
-

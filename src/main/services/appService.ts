@@ -33,6 +33,8 @@ export class AppService {
     console.log('[QuickFind:AppService] Initializing application services...');
     // Initialize SQLite in Electron's userData directory
     this.dbManager.initialize(this.config.databasePath);
+    // Initialize Indexing Service (volume discovery & synchronization)
+    await this.indexingService.initialize();
   }
 
   /**
@@ -72,18 +74,25 @@ export class AppService {
             : dbStatus.error || 'Database connection problem',
         },
         {
-          name: 'Indexing Engine Facade',
+          name: 'Indexing Engine (Worker & Filesystem Scanner)',
           state: 'healthy',
-          details: 'Ready for Milestone 2',
+          details: 'NTFS volume discovery & worker indexing active',
         },
         {
           name: 'Search Engine Facade',
           state: 'healthy',
-          details: 'Ready for Milestone 2',
+          details: 'Ready for Milestone 3',
         },
       ],
       timestamp: Date.now(),
     };
+  }
+
+  /**
+   * Returns the IndexingService instance
+   */
+  public getIndexingService(): IndexingService {
+    return this.indexingService;
   }
 
   /**

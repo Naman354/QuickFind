@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { DatabaseStatus } from '../../shared/types';
 import { SQLITE_CONFIG } from '../../shared/constants';
+import { MigrationManager } from './migrations';
 
 export class DatabaseManager {
   private static instance: DatabaseManager | null = null;
@@ -42,8 +43,11 @@ export class DatabaseManager {
       // Performance and integrity settings
       this.applyPragmas();
 
-      // Initialize metadata table for milestone tracking without implementing final schema
+      // Initialize metadata table for milestone tracking
       this.initializeMetadata();
+
+      // Run database migrations
+      MigrationManager.runMigrations(this.db);
 
       console.log(`[QuickFind:Database] Successfully connected to SQLite at ${this.dbPath}`);
     } catch (error) {
@@ -209,4 +213,3 @@ export class DatabaseManager {
     return Boolean(this.db && this.db.open);
   }
 }
-

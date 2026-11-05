@@ -54,10 +54,10 @@ async function dev() {
   console.log('=== Starting QuickFind Development Environment ===\n');
 
   try {
-    // 1. Initial build of preload and main
+    // 1. Initial build of main and preload
     console.log('Step 1: Compiling Main & Preload scripts...');
-    await runStep('npx', ['vite', 'build', '--config', 'vite.config.preload.mts']);
     await runStep('npx', ['tsc', '-p', 'tsconfig.node.json']);
+    await runStep('npx', ['vite', 'build', '--config', 'vite.config.preload.mts']);
 
     // 2. Start Vite dev server for React
     console.log('\nStep 2: Starting Vite dev server...');

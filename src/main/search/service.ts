@@ -31,4 +31,3 @@ export class SearchService implements ISearchEngine {
     // Teardown logic when needed
   }
 }
-

@@ -6,6 +6,10 @@ import {
   GetAppInfoResponse,
   GetDatabaseStatusResponse,
   GetSystemHealthResponse,
+  GetVolumesResponse,
+  GetIndexingStatusResponse,
+  StartIndexingResponse,
+  CancelIndexingResponse,
   WindowActionResponse,
 } from '../../shared/types';
 
@@ -14,6 +18,15 @@ export function registerIpcHandlers(
   isDev: boolean
 ): void {
   const appService = AppService.getInstance();
+  const indexingService = appService.getIndexingService();
+
+  // Forward indexing worker progress updates to renderer window
+  indexingService.onProgress(update => {
+    const win = getMainWindow();
+    if (win && !win.isDestroyed()) {
+      win.webContents.send(IPC_CHANNELS.INDEXING.PROGRESS_UPDATE, update);
+    }
+  });
 
   // Helper to validate and guard handler execution
   function guard<T>(
@@ -64,6 +77,40 @@ export function registerIpcHandlers(
     IPC_CHANNELS.DATABASE.GET_STATUS,
     async (event): Promise<GetDatabaseStatusResponse> => {
       return guard(event, () => appService.getDatabaseStatus());
+    }
+  );
+
+  // Indexing: Get Volumes
+  ipcMain.handle(IPC_CHANNELS.INDEXING.GET_VOLUMES, async (event): Promise<GetVolumesResponse> => {
+    return guard(event, () => indexingService.getVolumes());
+  });
+
+  // Indexing: Get Overall Status
+  ipcMain.handle(
+    IPC_CHANNELS.INDEXING.GET_STATUS,
+    async (event): Promise<GetIndexingStatusResponse> => {
+      return guard(event, () => indexingService.getStatus());
+    }
+  );
+
+  // Indexing: Start Scan
+  ipcMain.handle(
+    IPC_CHANNELS.INDEXING.START_SCAN,
+    async (event, volumeId: number): Promise<StartIndexingResponse> => {
+      return guard(event, () => {
+        if (typeof volumeId !== 'number' || isNaN(volumeId)) {
+          throw new Error('Invalid volumeId parameter provided');
+        }
+        return indexingService.startIndexing(volumeId);
+      });
+    }
+  );
+
+  // Indexing: Cancel Scan
+  ipcMain.handle(
+    IPC_CHANNELS.INDEXING.CANCEL_SCAN,
+    async (event): Promise<CancelIndexingResponse> => {
+      return guard(event, () => indexingService.cancelIndexing());
     }
   );
 

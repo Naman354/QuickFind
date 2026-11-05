@@ -13,7 +13,7 @@
   "files": [],
   "references": [
     { "path": "./tsconfig.node.json" },
+    { "path": "./tsconfig.preload.json" },
     { "path": "./tsconfig.renderer.json" }
   ]
 }
-

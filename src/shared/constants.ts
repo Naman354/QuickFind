@@ -3,7 +3,7 @@
  */
 
 export const APP_NAME = 'QuickFind';
-export const APP_VERSION = '0.1.0';
+export const APP_VERSION = '0.2.0';
 
 /**
  * IPC Channel identifiers
@@ -15,6 +15,13 @@ export const IPC_CHANNELS = {
   },
   DATABASE: {
     GET_STATUS: 'quickfind:database:getStatus',
+  },
+  INDEXING: {
+    GET_STATUS: 'quickfind:indexing:getStatus',
+    GET_VOLUMES: 'quickfind:indexing:getVolumes',
+    START_SCAN: 'quickfind:indexing:startScan',
+    CANCEL_SCAN: 'quickfind:indexing:cancelScan',
+    PROGRESS_UPDATE: 'quickfind:indexing:progressUpdate',
   },
   WINDOW: {
     MINIMIZE: 'quickfind:window:minimize',
@@ -28,8 +35,30 @@ export const IPC_CHANNELS = {
  */
 export const SQLITE_CONFIG = {
   DB_FILENAME: 'quickfind.db',
-  BUSY_TIMEOUT_MS: 5000,
+  BUSY_TIMEOUT_MS: 10000,
   CACHE_SIZE_KB: -64000, // 64 MB
   MMAP_SIZE_BYTES: 268435456, // 256 MB
 } as const;
 
+/**
+ * Filesystem Indexing Defaults
+ */
+export const INDEXING_CONFIG = {
+  BATCH_SIZE: 2000,
+  CONCURRENCY: 8,
+  PROGRESS_INTERVAL_MS: 300,
+  // Conservative exclusions for Windows system locations
+  EXCLUDED_DIR_NAMES: new Set([
+    '$recycle.bin',
+    'system volume information',
+    '$sysreset',
+    '$windows.~bt',
+    '$windows.~ws',
+  ]),
+  EXCLUDED_ROOT_FILES: new Set([
+    'pagefile.sys',
+    'hiberfil.sys',
+    'swapfile.sys',
+    'dumpstack.log.tmp',
+  ]),
+} as const;

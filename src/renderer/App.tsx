@@ -1,16 +1,60 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Header } from './components/Header';
 import { StatusBadge } from './components/StatusBadge';
 import { InfoCard } from './components/InfoCard';
-import { AppInfo, DatabaseStatus, SystemHealth } from '../shared/types';
+import { VolumeCard } from './components/VolumeCard';
+import { IndexingProgressCard } from './components/IndexingProgressCard';
+import {
+  AppInfo,
+  DatabaseStatus,
+  SystemHealth,
+  VolumeInfo,
+  IndexingStatus,
+  IndexingProgressUpdate,
+} from '../shared/types';
 import './App.css';
 
 export const App: React.FC = () => {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [dbStatus, setDbStatus] = useState<DatabaseStatus | null>(null);
   const [health, setHealth] = useState<SystemHealth | null>(null);
+  const [volumes, setVolumes] = useState<VolumeInfo[]>([]);
+  const [indexingStatus, setIndexingStatus] = useState<IndexingStatus | null>(null);
+  const [activeProgress, setActiveProgress] = useState<IndexingProgressUpdate | null>(null);
+  const [isCancelling, setIsCancelling] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+
+  const refreshData = useCallback(async () => {
+    if (!window.quickFindApi) return;
+
+    try {
+      const [volsRes, idxRes, healthRes, dbRes] = await Promise.all([
+        window.quickFindApi.indexing.getVolumes(),
+        window.quickFindApi.indexing.getStatus(),
+        window.quickFindApi.getHealth(),
+        window.quickFindApi.getDatabaseStatus(),
+      ]);
+
+      if (volsRes.success && volsRes.data) {
+        setVolumes(volsRes.data);
+      }
+      if (idxRes.success && idxRes.data) {
+        setIndexingStatus(idxRes.data);
+        if (idxRes.data.activeProgress) {
+          setActiveProgress(idxRes.data.activeProgress);
+        }
+      }
+      if (healthRes.success && healthRes.data) {
+        setHealth(healthRes.data);
+      }
+      if (dbRes.success && dbRes.data) {
+        setDbStatus(dbRes.data);
+      }
+    } catch (err) {
+      console.error('[QuickFind:Renderer] Refresh error:', err);
+    }
+  }, []);
 
   useEffect(() => {
     async function loadInitialData() {
@@ -21,25 +65,14 @@ export const App: React.FC = () => {
       }
 
       try {
-        const [infoRes, healthRes, dbRes] = await Promise.all([
-          window.quickFindApi.getAppInfo(),
-          window.quickFindApi.getHealth(),
-          window.quickFindApi.getDatabaseStatus(),
-        ]);
-
+        const infoRes = await window.quickFindApi.getAppInfo();
         if (infoRes.success && infoRes.data) {
           setAppInfo(infoRes.data);
         } else {
           setError(infoRes.error || 'Failed to fetch application metadata');
         }
 
-        if (healthRes.success && healthRes.data) {
-          setHealth(healthRes.data);
-        }
-
-        if (dbRes.success && dbRes.data) {
-          setDbStatus(dbRes.data);
-        }
+        await refreshData();
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
@@ -48,7 +81,50 @@ export const App: React.FC = () => {
     }
 
     loadInitialData();
-  }, []);
+
+    // Subscribe to live indexing progress notifications
+    const unsubscribe = window.quickFindApi?.indexing?.onProgress(update => {
+      if (update.status === 'running') {
+        setActiveProgress(update);
+      } else {
+        // Scan finished, cancelled or failed
+        setActiveProgress(null);
+        setIsCancelling(false);
+        refreshData();
+      }
+    });
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, [refreshData]);
+
+  const handleStartIndexing = async (volumeId: number) => {
+    if (!window.quickFindApi) return;
+    try {
+      const res = await window.quickFindApi.indexing.startScan(volumeId);
+      if (!res.success) {
+        alert(`Failed to start indexing: ${res.error}`);
+      } else {
+        refreshData();
+      }
+    } catch (err) {
+      alert(`Error starting scan: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  const handleCancelIndexing = async () => {
+    if (!window.quickFindApi) return;
+    try {
+      setIsCancelling(true);
+      await window.quickFindApi.indexing.cancelScan();
+    } catch (err) {
+      console.error('[QuickFind:Renderer] Cancel error:', err);
+      setIsCancelling(false);
+    }
+  };
+
+  const isScanning = activeProgress !== null || indexingStatus?.state === 'indexing';
 
   return (
     <div className="app-container">
@@ -68,7 +144,7 @@ export const App: React.FC = () => {
           </div>
         ) : (
           <div className="dashboard">
-            {/* Success Banner */}
+            {/* Hero Banner */}
             <section className="hero-banner">
               <div className="hero-status">
                 <div className="success-icon-wrapper">
@@ -85,18 +161,66 @@ export const App: React.FC = () => {
                   </svg>
                 </div>
                 <div>
-                  <h1 className="hero-title">QuickFind Started Successfully</h1>
+                  <h1 className="hero-title">Filesystem Indexing Engine Active</h1>
                   <p className="hero-subtitle">
-                    Desktop foundation, local SQLite persistence, and secure IPC boundaries are
-                    active.
+                    NTFS volume discovery, background worker scanning, and SQLite metadata
+                    persistence are operational.
                   </p>
                 </div>
               </div>
               <div className="hero-meta">
                 <StatusBadge
-                  status={health?.state === 'healthy' ? 'healthy' : 'degraded'}
-                  label={health?.state === 'healthy' ? 'READY' : 'DEGRADED'}
+                  status={
+                    isScanning ? 'pending' : health?.state === 'healthy' ? 'healthy' : 'degraded'
+                  }
+                  label={isScanning ? 'INDEXING' : 'READY'}
                 />
+              </div>
+            </section>
+
+            {/* Live Indexing Session View */}
+            {activeProgress && (
+              <IndexingProgressCard
+                progress={activeProgress}
+                onCancel={handleCancelIndexing}
+                isCancelling={isCancelling}
+              />
+            )}
+
+            {/* Volumes Section */}
+            <section className="section-container">
+              <div className="section-header">
+                <div>
+                  <h2 className="section-title">Discovered Local NTFS Volumes</h2>
+                  <p className="section-subtitle">
+                    Select a local drive to begin recursive filesystem scanning and SQLite indexing
+                  </p>
+                </div>
+                <div className="section-badge">
+                  <span>Total Indexed: </span>
+                  <strong>
+                    {(
+                      (indexingStatus?.totalIndexedFiles || 0) +
+                      (indexingStatus?.totalIndexedFolders || 0)
+                    ).toLocaleString()}{' '}
+                    entries
+                  </strong>
+                </div>
+              </div>
+
+              <div className="volumes-grid">
+                {volumes.length > 0 ? (
+                  volumes.map(vol => (
+                    <VolumeCard
+                      key={vol.id}
+                      volume={vol}
+                      isScanning={isScanning}
+                      onStartIndexing={handleStartIndexing}
+                    />
+                  ))
+                ) : (
+                  <div className="empty-box">No accessible NTFS volumes found on this device.</div>
+                )}
               </div>
             </section>
 
@@ -125,22 +249,25 @@ export const App: React.FC = () => {
                   },
                   {
                     label: 'SQLite FTS5',
-                    value: dbStatus?.fts5Available ? 'Enabled & Ready' : 'Unavailable',
+                    value: dbStatus?.fts5Available ? 'Enabled' : 'Unavailable',
                     highlight: true,
                   },
                   {
-                    label: 'Foreign Keys',
-                    value: dbStatus?.foreignKeysEnabled ? 'Enforced' : 'Off',
+                    label: 'Indexed Files',
+                    value: (indexingStatus?.totalIndexedFiles || 0).toLocaleString(),
                   },
-                  { label: 'Memory Cache', value: `${dbStatus?.cacheSizeKb || 0} KB` },
+                  {
+                    label: 'Indexed Folders',
+                    value: (indexingStatus?.totalIndexedFolders || 0).toLocaleString(),
+                  },
                   { label: 'Location', value: dbStatus?.filePath || 'N/A' },
                 ]}
               />
 
-              {/* Architecture Pillars */}
+              {/* Engine Architecture */}
               <InfoCard
                 title="Engine Architecture"
-                subtitle="Logical component status"
+                subtitle="Component execution status"
                 icon={
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
@@ -150,14 +277,18 @@ export const App: React.FC = () => {
                 }
                 items={[
                   {
-                    label: 'Desktop Interface (UI)',
-                    value: 'Active (React 19 + Vite)',
+                    label: 'Desktop Interface',
+                    value: 'React 19 + Vite (Sandboxed)',
                     highlight: true,
                   },
-                  { label: 'Preload / IPC Security', value: 'Sandboxed (contextIsolation)' },
-                  { label: 'Indexing Engine Facade', value: 'Ready for Milestone 2' },
-                  { label: 'Search Engine Facade', value: 'Ready for Milestone 2' },
-                  { label: 'Worker / Utility Offload', value: 'Architecturally Supported' },
+                  {
+                    label: 'Indexing Engine',
+                    value: isScanning ? 'Active (Scanning)' : 'Ready (Worker Thread)',
+                    highlight: true,
+                  },
+                  { label: 'Concurrency Model', value: 'Bounded (8 Workers/Batch 2000)' },
+                  { label: 'NTFS Reparse Points', value: 'Ignored (No recursion)' },
+                  { label: 'Search Engine Facade', value: 'Ready for Milestone 3' },
                 ]}
               />
 
@@ -182,9 +313,11 @@ export const App: React.FC = () => {
             </div>
 
             <footer className="footer-note">
-              <span>QuickFind Milestone 1 Foundation Complete</span>
+              <span>
+                QuickFind Milestone 2 Complete: Database Schema & Filesystem Indexing Engine
+              </span>
               <span>•</span>
-              <span>Next Milestone: Filesystem Indexing & Search Engine Schema</span>
+              <span>Next Milestone: FTS5 Query Processing & Desktop Search Interface</span>
             </footer>
           </div>
         )}

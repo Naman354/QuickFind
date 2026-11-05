@@ -36,4 +36,3 @@ export const InfoCard: React.FC<InfoCardProps> = ({ title, subtitle, items, icon
     </div>
   );
 };
-
