@@ -1,0 +1,51 @@
+{
+  "name": "quickfind",
+  "version": "0.1.0",
+  "description": "Fast, accurate, completely local Windows desktop file-search application",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "node scripts/build.mjs",
+    "build:renderer": "vite build",
+    "build:main": "tsc -p tsconfig.node.json",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "lint": "eslint src",
+    "lint:fix": "eslint src --fix",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css,json}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css,json}\"",
+    "rebuild": "electron-rebuild -f -w better-sqlite3"
+  },
+  "keywords": [
+    "file-search",
+    "desktop",
+    "electron",
+    "sqlite",
+    "react",
+    "quickfind"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.2.1",
+    "@eslint/js": "^9.39.5",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^45.2.3",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "prettier": "^3.9.10",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.1",
+    "vite": "^8.3.6"
+  }
+}
