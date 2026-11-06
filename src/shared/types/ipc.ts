@@ -23,3 +23,6 @@ export type GetSearchResponse = IpcResponse<SearchResults>;
 export type WindowActionResponse = IpcResponse<void>;
 export type GetSyncStatusResponse = IpcResponse<Record<number, VolumeCheckpoint>>;
 export type ReconcileVolumeResponse = IpcResponse<{ volumeId: number; reconciledCount: number }>;
+export type FileOpenResponse = IpcResponse<{ opened: boolean }>;
+export type FileRevealResponse = IpcResponse<{ revealed: boolean }>;
+export type FileCopyPathResponse = IpcResponse<{ copied: boolean }>;

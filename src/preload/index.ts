@@ -36,10 +36,33 @@ const api: QuickFindApi = {
     },
   },
   search: (query: SearchQuery) => ipcRenderer.invoke(IPC_CHANNELS.SEARCH.EXECUTE, query),
+  file: {
+    open: (targetPath: string) => ipcRenderer.invoke(IPC_CHANNELS.FILE.OPEN, targetPath),
+    reveal: (targetPath: string) => ipcRenderer.invoke(IPC_CHANNELS.FILE.REVEAL, targetPath),
+    copyPath: (targetPath: string) => ipcRenderer.invoke(IPC_CHANNELS.FILE.COPY_PATH, targetPath),
+  },
   window: {
     minimize: () => ipcRenderer.invoke(IPC_CHANNELS.WINDOW.MINIMIZE),
     maximize: () => ipcRenderer.invoke(IPC_CHANNELS.WINDOW.MAXIMIZE),
     close: () => ipcRenderer.invoke(IPC_CHANNELS.WINDOW.CLOSE),
+    hide: () => ipcRenderer.invoke(IPC_CHANNELS.WINDOW.HIDE),
+    setHeight: (height: number) => ipcRenderer.invoke(IPC_CHANNELS.WINDOW.SET_HEIGHT, height),
+    setViewMode: (mode: 'search' | 'manage') =>
+      ipcRenderer.invoke(IPC_CHANNELS.WINDOW.SET_VIEW_MODE, mode),
+    onFocusInput: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(IPC_CHANNELS.WINDOW.FOCUS_INPUT, handler);
+      return () => {
+        ipcRenderer.removeListener(IPC_CHANNELS.WINDOW.FOCUS_INPUT, handler);
+      };
+    },
+    onSwitchView: (callback: (mode: 'search' | 'manage') => void) => {
+      const handler = (_event: IpcRendererEvent, mode: 'search' | 'manage') => callback(mode);
+      ipcRenderer.on(IPC_CHANNELS.WINDOW.SWITCH_VIEW, handler);
+      return () => {
+        ipcRenderer.removeListener(IPC_CHANNELS.WINDOW.SWITCH_VIEW, handler);
+      };
+    },
   },
 };
 

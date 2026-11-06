@@ -31,12 +31,27 @@ export const IPC_CHANNELS = {
   SEARCH: {
     EXECUTE: 'quickfind:search:execute',
   },
+  FILE: {
+    OPEN: 'quickfind:file:open',
+    REVEAL: 'quickfind:file:reveal',
+    COPY_PATH: 'quickfind:file:copyPath',
+  },
   WINDOW: {
     MINIMIZE: 'quickfind:window:minimize',
     MAXIMIZE: 'quickfind:window:maximize',
     CLOSE: 'quickfind:window:close',
+    HIDE: 'quickfind:window:hide',
+    SET_HEIGHT: 'quickfind:window:setHeight',
+    SET_VIEW_MODE: 'quickfind:window:setViewMode',
+    FOCUS_INPUT: 'quickfind:window:focusInput',
+    SWITCH_VIEW: 'quickfind:window:switchView',
   },
 } as const;
+
+/**
+ * Global Keyboard Shortcut
+ */
+export const GLOBAL_SHORTCUT_DEFAULT = 'CommandOrControl+Shift+Space';
 
 /**
  * SQLite Configuration Defaults

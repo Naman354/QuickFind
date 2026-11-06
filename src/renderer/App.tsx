@@ -5,6 +5,7 @@ import { InfoCard } from './components/InfoCard';
 import { VolumeCard } from './components/VolumeCard';
 import { IndexingProgressCard } from './components/IndexingProgressCard';
 import { SearchTester } from './components/SearchTester';
+import { FloatingSearch } from './components/FloatingSearch';
 import {
   AppInfo,
   DatabaseStatus,
@@ -16,6 +17,7 @@ import {
 import './App.css';
 
 export const App: React.FC = () => {
+  const [viewMode, setViewMode] = useState<'search' | 'manage'>('search');
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [dbStatus, setDbStatus] = useState<DatabaseStatus | null>(null);
   const [health, setHealth] = useState<SystemHealth | null>(null);
@@ -100,11 +102,34 @@ export const App: React.FC = () => {
       refreshData();
     });
 
+    // Subscribe to view mode switches from tray/main process
+    const unsubSwitchView = window.quickFindApi?.window?.onSwitchView?.(mode => {
+      setViewMode(mode);
+    });
+
     return () => {
       if (unsubscribe) unsubscribe();
       if (unsubSync) unsubSync();
+      if (unsubSwitchView) unsubSwitchView();
     };
   }, [refreshData]);
+
+  // Handle Escape key when in manage mode to return to quick search
+  useEffect(() => {
+    if (viewMode !== 'manage') return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setViewMode('search');
+        window.quickFindApi?.window.setViewMode('search');
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [viewMode]);
 
   const handleStartIndexing = async (volumeId: number) => {
     if (!window.quickFindApi) return;
@@ -148,9 +173,26 @@ export const App: React.FC = () => {
 
   const isScanning = activeProgress !== null || indexingStatus?.state === 'indexing';
 
+  if (viewMode === 'search') {
+    return (
+      <FloatingSearch
+        onOpenManage={() => {
+          setViewMode('manage');
+          window.quickFindApi?.window.setViewMode('manage');
+        }}
+      />
+    );
+  }
+
   return (
     <div className="app-container">
-      <Header appName={appInfo?.name || 'QuickFind'} />
+      <Header
+        appName={appInfo?.name || 'QuickFind'}
+        onBackToSearch={() => {
+          setViewMode('search');
+          window.quickFindApi?.window.setViewMode('search');
+        }}
+      />
 
       <main className="app-content">
         {loading ? (

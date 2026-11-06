@@ -352,6 +352,56 @@ npm run format
 
 ---
 
+## Floating Desktop Search & System Tray
+
+In Milestone 5, QuickFind transforms into a minimal, keyboard-first Windows desktop search application:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 🔍  package.json              0.4 ms • 18 hits       ✕   ⚙ │
+├─────────────────────────────────────────────────────────────┤
+│  [All]  [Files]  [Folders]                          1 of 18 │
+├─────────────────────────────────────────────────────────────┤
+│ 📄 package.json                    [EXACT NAME]    1.5 KB   │
+│    D:\Development\Utility\QuickFind\package.json  Nov 6, 2026│
+│                                                             │
+│ 📄 package-lock.json               [PREFIX]      186.6 KB   │
+│    D:\Development\Utility\QuickFind\package-lock.json       │
+├─────────────────────────────────────────────────────────────┤
+│ [↵] Open  [Ctrl+↵] Reveal  [Ctrl+⇧+C] Copy Path  [Esc] Close│
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 1. Global Keyboard Shortcut
+- **Shortcut**: `Ctrl + Shift + Space` (`CommandOrControl+Shift+Space`).
+- **Behavior**: Summons QuickFind from anywhere in Windows or dismisses it if already focused.
+- **Display Awareness**: Centers horizontally in the upper 15% of the active display (the monitor where the user's cursor currently resides).
+- **Auto-Focus**: Immediately focuses and selects search input upon summons. Any character typed anywhere in the window directs straight into the search box.
+
+### 2. Windows System Tray
+- **Tray Icon**: Crisp 32x32 native image docked in the Windows system notification area.
+- **Context Menu**:
+  - **Open QuickFind** (`Ctrl+Shift+Space`) — Toggles floating search bar.
+  - **Manage Indexed Volumes** — Switches window into full management view (Volumes, Indexing sessions, Database status).
+  - **Re-index All Volumes** — Triggers scanning across all discovered NTFS drives.
+  - **Quit QuickFind** — Safely unregisters shortcuts, tears down watchers, shuts down SQLite, and terminates the application.
+- **Window Lifecycle**: Closing or blurring the floating search window hides it; background filesystem watchers and incremental synchronization continue running uninterrupted. QuickFind is only terminated via Tray "Quit".
+
+### 3. Keyboard-First Navigation
+| Shortcut | Action | Description |
+|---|---|---|
+| `↑` / `↓` | Select Result | Cycles selection through ranked results (first selected by default). Automatically scrolls item into view. |
+| `↵` (Enter) | Open File/Folder | Launches item in its default application or opens folder via `shell.openPath`. Gracefully verifies file existence on disk first. Hides search window on success. |
+| `Ctrl + ↵` | Reveal in Explorer | Highlights and reveals item in Windows File Explorer via `shell.showItemInFolder`. |
+| `Ctrl + ⇧ + C` | Copy Path | Copies absolute path to Windows clipboard via `clipboard.writeText` and shows a confirmation toast. |
+| `Esc` | Clear / Dismiss | Dismisses active errors/toasts; if search input has text, clears text; if input is empty, dismisses floating window. |
+
+### 4. Dual View Modes
+- **Floating Search (`'search'`)**: Frameless, minimal floating spotlight window (width 680px, height 58px expanding dynamically up to 520px with results).
+- **Volume Management (`'manage'`)**: Expands to full 920x640 window displaying discovered NTFS volumes, indexing controls, USN checkpoints, and search engine test panel. Seamlessly return to search mode anytime via the header "Quick Search" button or `Escape`.
+
+---
+
 ## Milestone Status & Roadmap
 
 - **Milestone 1 (Complete)**: Project Foundation & Architecture
@@ -381,7 +431,10 @@ npm run format
   - Targeted directory differential reconciliation avoiding full drive rescanning.
   - Race condition buffering during initial volume scanning.
   - Controlled Electron IPC endpoints (`quickfind:sync:getStatus`, `quickfind:sync:reconcile`, `quickfind:sync:statusUpdate`) and enriched volume dashboard UI.
-- **Milestone 5 (Next)**: Final Desktop Search Interface & System Tray
-  - Spotlight/Raycast-style floating search bar with hotkey activation (`Alt+Space` / `Ctrl+Space`).
-  - Native file opening and folder reveals in Windows Explorer (`shell.openPath`, `shell.showItemInFolder`).
-  - System tray icon and background controls.
+- **Milestone 5 (Complete)**: Floating Desktop Search Interface & System Tray
+  - Spotlight/Raycast-style floating search window with dynamic height expansion.
+  - Global keyboard shortcut (`Ctrl + Shift + Space`) with display-aware positioning (upper 15% of active display).
+  - System tray icon with context menu ("Open QuickFind", "Manage Indexed Volumes", "Re-index All Volumes", "Quit QuickFind").
+  - Keyboard-first result navigation (`ArrowUp/Down`, `Enter`, `Ctrl+Enter`, `Ctrl+Shift+C`, `Escape`).
+  - Native file operations (`shell.openPath`, `shell.showItemInFolder`, `clipboard.writeText`) with stale file disk verification.
+  - Dual-mode architecture seamlessly toggling between compact floating search bar and comprehensive volume management dashboard.

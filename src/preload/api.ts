@@ -31,9 +31,19 @@ export interface QuickFindApi {
     onStatusUpdate(callback: (update: VolumeSyncStatusUpdate) => void): () => void;
   };
   search(query: SearchQuery): Promise<IpcResponse<SearchResults>>;
+  file: {
+    open(targetPath: string): Promise<IpcResponse<{ opened: boolean }>>;
+    reveal(targetPath: string): Promise<IpcResponse<{ revealed: boolean }>>;
+    copyPath(targetPath: string): Promise<IpcResponse<{ copied: boolean }>>;
+  };
   window: {
     minimize(): Promise<IpcResponse<void>>;
     maximize(): Promise<IpcResponse<void>>;
     close(): Promise<IpcResponse<void>>;
+    hide(): Promise<IpcResponse<void>>;
+    setHeight(height: number): Promise<IpcResponse<void>>;
+    setViewMode(mode: 'search' | 'manage'): Promise<IpcResponse<void>>;
+    onFocusInput(callback: () => void): () => void;
+    onSwitchView(callback: (mode: 'search' | 'manage') => void): () => void;
   };
 }

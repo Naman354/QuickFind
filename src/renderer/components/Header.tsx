@@ -2,9 +2,10 @@ import React from 'react';
 
 interface HeaderProps {
   appName: string;
+  onBackToSearch?: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ appName }) => {
+export const Header: React.FC<HeaderProps> = ({ appName, onBackToSearch }) => {
   const handleMinimize = () => {
     window.quickFindApi?.window.minimize();
   };
@@ -35,9 +36,22 @@ export const Header: React.FC<HeaderProps> = ({ appName }) => {
             <path d="M11 8v6M8 11h6" />
           </svg>
           <span className="app-title">{appName}</span>
-          <span className="app-badge">Milestone 1</span>
+          <span className="app-badge">Management</span>
         </div>
       </div>
+      {onBackToSearch && (
+        <button
+          className="header-switch-btn"
+          onClick={onBackToSearch}
+          title="Switch to Floating Search (Ctrl+Shift+Space)"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <span>Quick Search</span>
+        </button>
+      )}
       <div className="window-controls">
         <button
           className="window-btn minimize"

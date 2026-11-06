@@ -1,8 +1,16 @@
-import { ipcMain, BrowserWindow } from 'electron';
+import { ipcMain, BrowserWindow, shell, clipboard } from 'electron';
+import fs from 'fs';
+import path from 'path';
 import { IPC_CHANNELS } from '../../shared/constants';
 import { AppService } from '../services/appService';
 import { validateIpcSender } from '../security/validator';
 import { SyncService } from '../indexing/sync/syncService';
+import {
+  hideFloatingSearch,
+  setFloatingWindowHeight,
+  setWindowViewMode,
+  ViewMode,
+} from '../window';
 import {
   GetAppInfoResponse,
   GetDatabaseStatusResponse,
@@ -17,6 +25,9 @@ import {
   GetSyncStatusResponse,
   ReconcileVolumeResponse,
   VolumeSyncStatusUpdate,
+  FileOpenResponse,
+  FileRevealResponse,
+  FileCopyPathResponse,
 } from '../../shared/types';
 
 export function registerIpcHandlers(
@@ -162,6 +173,57 @@ export function registerIpcHandlers(
     }
   );
 
+  // File & Folder Operations
+  ipcMain.handle(
+    IPC_CHANNELS.FILE.OPEN,
+    async (event, targetPath: string): Promise<FileOpenResponse> => {
+      return guard(event, async () => {
+        if (!targetPath || typeof targetPath !== 'string') {
+          throw new Error('Invalid file path provided');
+        }
+        const normalized = path.normalize(targetPath);
+        if (!fs.existsSync(normalized)) {
+          throw new Error(`Item no longer exists on disk: "${normalized}"`);
+        }
+        const errorMsg = await shell.openPath(normalized);
+        if (errorMsg) {
+          throw new Error(`Failed to open path: ${errorMsg}`);
+        }
+        return { opened: true };
+      });
+    }
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.FILE.REVEAL,
+    async (event, targetPath: string): Promise<FileRevealResponse> => {
+      return guard(event, () => {
+        if (!targetPath || typeof targetPath !== 'string') {
+          throw new Error('Invalid file path provided');
+        }
+        const normalized = path.normalize(targetPath);
+        if (!fs.existsSync(normalized)) {
+          throw new Error(`Item no longer exists on disk: "${normalized}"`);
+        }
+        shell.showItemInFolder(normalized);
+        return { revealed: true };
+      });
+    }
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.FILE.COPY_PATH,
+    async (event, targetPath: string): Promise<FileCopyPathResponse> => {
+      return guard(event, () => {
+        if (!targetPath || typeof targetPath !== 'string') {
+          throw new Error('Invalid file path provided');
+        }
+        clipboard.writeText(targetPath);
+        return { copied: true };
+      });
+    }
+  );
+
   // Window Controls
   ipcMain.handle(IPC_CHANNELS.WINDOW.MINIMIZE, async (event): Promise<WindowActionResponse> => {
     return guard(event, () => {
@@ -193,4 +255,37 @@ export function registerIpcHandlers(
       }
     });
   });
+
+  ipcMain.handle(IPC_CHANNELS.WINDOW.HIDE, async (event): Promise<WindowActionResponse> => {
+    return guard(event, () => {
+      const win = getMainWindow();
+      if (win && !win.isDestroyed()) {
+        hideFloatingSearch(win);
+      }
+    });
+  });
+
+  ipcMain.handle(
+    IPC_CHANNELS.WINDOW.SET_HEIGHT,
+    async (event, height: number): Promise<WindowActionResponse> => {
+      return guard(event, () => {
+        const win = getMainWindow();
+        if (win && !win.isDestroyed() && typeof height === 'number') {
+          setFloatingWindowHeight(win, height);
+        }
+      });
+    }
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.WINDOW.SET_VIEW_MODE,
+    async (event, mode: ViewMode): Promise<WindowActionResponse> => {
+      return guard(event, () => {
+        const win = getMainWindow();
+        if (win && !win.isDestroyed() && (mode === 'search' || mode === 'manage')) {
+          setWindowViewMode(win, mode);
+        }
+      });
+    }
+  );
 }
