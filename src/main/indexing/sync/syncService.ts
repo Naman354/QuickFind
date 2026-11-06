@@ -6,6 +6,8 @@ import { FilesystemWatcher } from './watcher/filesystemWatcher';
 import { ChangeProcessor } from './changeProcessor';
 import { UsnReader } from './usn/usnReader';
 import { UsnJournalInfo } from './usn/usnTypes';
+import { FilesystemScanner } from '../worker/scanner';
+import { IndexerDb } from '../worker/indexerDb';
 import { PathUtils } from '../pathUtils';
 import {
   FsChangeEvent,
@@ -14,6 +16,8 @@ import {
   VolumeCheckpoint,
   VolumeSyncStatusUpdate,
 } from '../../../shared/types';
+
+const MAX_BUFFERED_EVENTS = 5000;
 
 interface VolumeSyncRuntime {
   volumeId: number;
@@ -25,15 +29,15 @@ interface VolumeSyncRuntime {
   lastProcessedUsn: string | null;
   lastSyncTimestamp: number | null;
   errorMessage: string | null;
-  // Buffer used to queue events arriving while an initial scan is actively running
   isScanning: boolean;
+  requiresPostScanReconciliation: boolean;
   scanEventBuffer: FsChangeEvent[];
 }
 
 /**
  * SyncService
- * Central orchestration service for incremental filesystem synchronization,
- * USN Journal checkpointing, Windows filesystem monitoring, and targeted reconciliation.
+ * Central orchestration service for durable incremental filesystem synchronization,
+ * NTFS USN Change Journal batch reading, Windows filesystem monitoring, and full reconciliation.
  */
 export class SyncService extends EventEmitter {
   private static instance: SyncService | null = null;
@@ -52,7 +56,7 @@ export class SyncService extends EventEmitter {
   }
 
   /**
-   * Initializes synchronization for all indexed volumes on startup
+   * Initializes synchronization for all indexed volumes on application startup
    */
   public async initialize(): Promise<void> {
     if (this.isInitialized) return;
@@ -61,7 +65,6 @@ export class SyncService extends EventEmitter {
     console.log('[QuickFind:SyncService] Initializing incremental filesystem synchronization...');
     const db = DatabaseManager.getInstance().getDatabase();
 
-    // Query all indexed volumes
     const volumes = db
       .prepare(
         `
@@ -112,7 +115,6 @@ export class SyncService extends EventEmitter {
     driveLetter: string,
     existingCheckpoint?: VolumeCheckpoint
   ): Promise<void> {
-    // If already monitoring this volume, return
     if (this.runtimes.has(volumeId)) {
       return;
     }
@@ -122,29 +124,83 @@ export class SyncService extends EventEmitter {
       `[QuickFind:SyncService] Configuring synchronization for volume ${volumeId} (${rootPath})...`
     );
 
-    // 1. Query NTFS USN Journal if available
-    const journalInfo = await UsnReader.queryJournal(driveLetter);
+    // 1. Check USN capabilities and query current journal metadata
+    const capability = await UsnReader.checkCapability(driveLetter);
+    const journalInfo = capability.journalInfo;
 
-    const syncMode: SyncMode = 'filesystem_watcher';
-    let syncStatus: SyncStatus = 'synced';
-    let errorMessage: string | null = null;
+    let syncMode: SyncMode = 'filesystem_watcher';
+    const syncStatus: SyncStatus = 'synced';
+    const errorMessage: string | null = null;
     let lastUsn = existingCheckpoint?.lastProcessedUsn || journalInfo?.nextUsn || null;
 
-    if (journalInfo) {
-      if (existingCheckpoint && existingCheckpoint.lastProcessedUsn) {
-        const validation = UsnReader.isCheckpointValid(existingCheckpoint, journalInfo);
-        if (!validation.valid) {
-          console.warn(
-            `[QuickFind:SyncService] Checkpoint invalid for volume ${volumeId} (reason: ${validation.reason}). Reconciliation required.`
-          );
-          syncStatus = 'reconciling';
-          errorMessage = `USN checkpoint invalid: ${validation.reason}`;
-        }
+    const db = DatabaseManager.getInstance().getDatabase();
+    const processor = new ChangeProcessor(db);
+
+    // 2. Validate saved journal checkpoint
+    if (journalInfo && existingCheckpoint?.lastProcessedUsn) {
+      const validation = UsnReader.isCheckpointValid(existingCheckpoint, journalInfo);
+
+      if (!validation.valid) {
+        console.warn(
+          `[QuickFind:SyncService] Checkpoint invalid for volume ${volumeId} (reason: ${validation.reason}). Initiating full volume reconciliation.`
+        );
+        // Full volume reconciliation when journal history is unavailable or rolled over
+        await this.reconcileVolumeFull(volumeId);
+        return;
       }
-      lastUsn = journalInfo.nextUsn;
+
+      // Checkpoint is valid: attempt durable catch-up
+      if (capability.canReadRecords) {
+        console.log(
+          `[QuickFind:SyncService] Reading USN Journal catch-up records from ${existingCheckpoint.lastProcessedUsn}...`
+        );
+        try {
+          let currentStartUsn = existingCheckpoint.lastProcessedUsn;
+          let hasMore = true;
+          let totalRecordsProcessed = 0;
+
+          while (hasMore) {
+            const readRes = await UsnReader.readJournal(
+              driveLetter,
+              currentStartUsn,
+              journalInfo.journalId
+            );
+
+            if (readRes.error) {
+              console.warn(
+                `[QuickFind:SyncService] Catch-up read returned error: ${readRes.error}`
+              );
+              break;
+            }
+
+            if (readRes.records.length > 0) {
+              await processor.processUsnBatch(volumeId, readRes.records, readRes.nextUsn);
+              totalRecordsProcessed += readRes.records.length;
+              currentStartUsn = readRes.nextUsn;
+            }
+
+            hasMore = readRes.hasMore && readRes.records.length > 0;
+          }
+
+          syncMode = 'usn_journal';
+          lastUsn = currentStartUsn;
+          console.log(
+            `[QuickFind:SyncService] USN Journal catch-up completed: ${totalRecordsProcessed} records applied (Next USN: ${lastUsn})`
+          );
+        } catch (catchErr) {
+          console.error(
+            `[QuickFind:SyncService] Catch-up failed for volume ${volumeId}:`,
+            catchErr
+          );
+        }
+      } else {
+        console.log(
+          `[QuickFind:SyncService] Running without Administrator rights. Using live filesystem watcher for volume ${volumeId}.`
+        );
+      }
     }
 
-    // 2. Initialize native filesystem watcher (ReadDirectoryChangesW)
+    // 3. Initialize native recursive filesystem watcher (ReadDirectoryChangesW)
     const watcher = new FilesystemWatcher({
       volumeId,
       rootPath,
@@ -161,27 +217,55 @@ export class SyncService extends EventEmitter {
       lastSyncTimestamp: Date.now(),
       errorMessage,
       isScanning: false,
+      requiresPostScanReconciliation: false,
       scanEventBuffer: [],
     };
 
     this.runtimes.set(volumeId, runtime);
 
-    // 3. Connect watcher event listeners
+    // 4. Connect watcher event listeners
     watcher.on('changes', async ({ changes }: { changes: FsChangeEvent[] }) => {
       await this.handleVolumeChanges(volumeId, changes);
     });
 
-    watcher.on('overflow', () => {
+    // 5. Watcher buffer overflow: attempt USN journal catch-up before reconciliation
+    watcher.on('overflow', async () => {
       console.warn(
-        `[QuickFind:SyncService] Watcher buffer overflow on volume ${volumeId}. Triggering reconciliation.`
+        `[QuickFind:SyncService] Watcher buffer overflow on volume ${volumeId}. Attempting USN Journal catch-up...`
       );
-      runtime.syncStatus = 'reconciling';
-      this.reconcileVolume(volumeId).catch(err => {
-        console.error(
-          `[QuickFind:SyncService] Auto-reconciliation failed for volume ${volumeId}:`,
-          err
-        );
-      });
+      runtime.syncStatus = 'syncing';
+      this.broadcastStatus(volumeId);
+
+      try {
+        let caughtUp = false;
+        if (runtime.lastProcessedUsn && runtime.currentJournal?.journalId) {
+          const catchupRes = await UsnReader.readJournal(
+            runtime.driveLetter,
+            runtime.lastProcessedUsn,
+            runtime.currentJournal.journalId
+          );
+
+          if (!catchupRes.error && catchupRes.records.length > 0) {
+            await processor.processUsnBatch(volumeId, catchupRes.records, catchupRes.nextUsn);
+            runtime.lastProcessedUsn = catchupRes.nextUsn;
+            runtime.syncStatus = 'synced';
+            caughtUp = true;
+            console.log(
+              `[QuickFind:SyncService] Successfully caught up ${catchupRes.records.length} records via USN Journal after overflow.`
+            );
+          }
+        }
+
+        if (!caughtUp) {
+          console.warn(
+            `[QuickFind:SyncService] USN catch-up unavailable. Triggering full volume reconciliation...`
+          );
+          await this.reconcileVolumeFull(volumeId);
+        }
+      } catch (err) {
+        console.error(`[QuickFind:SyncService] Error recovering from buffer overflow:`, err);
+        await this.reconcileVolumeFull(volumeId);
+      }
     });
 
     watcher.on('error', ({ error }: { error: string }) => {
@@ -190,10 +274,9 @@ export class SyncService extends EventEmitter {
       this.broadcastStatus(volumeId);
     });
 
-    // 4. Start the watcher
     watcher.start();
 
-    // 5. Save updated checkpoint to database
+    // 6. Save updated checkpoint to database
     this.saveCheckpoint(volumeId, {
       volumeId,
       journalId: journalInfo?.journalId || null,
@@ -211,7 +294,7 @@ export class SyncService extends EventEmitter {
   }
 
   /**
-   * Prepares a volume for an initial scan by buffering events to handle race conditions
+   * Prepares a volume for an initial scan by buffering events to prevent race conditions
    */
   public async prepareVolumeForScan(volumeId: number, driveLetter: string): Promise<void> {
     const rootPath = driveLetter.endsWith('\\') ? driveLetter : driveLetter + '\\';
@@ -230,6 +313,7 @@ export class SyncService extends EventEmitter {
         lastSyncTimestamp: null,
         errorMessage: null,
         isScanning: true,
+        requiresPostScanReconciliation: false,
         scanEventBuffer: [],
       };
       this.runtimes.set(volumeId, runtime);
@@ -240,6 +324,7 @@ export class SyncService extends EventEmitter {
       watcher.start();
     } else {
       runtime.isScanning = true;
+      runtime.requiresPostScanReconciliation = false;
       runtime.scanEventBuffer = [];
       runtime.syncStatus = 'syncing';
     }
@@ -260,6 +345,16 @@ export class SyncService extends EventEmitter {
     const buffered = runtime.scanEventBuffer;
     runtime.scanEventBuffer = [];
 
+    // If buffer limit was exceeded during scan, execute full reconciliation
+    if (runtime.requiresPostScanReconciliation) {
+      console.log(
+        `[QuickFind:SyncService] Buffer limit was exceeded during initial scan. Running full reconciliation for volume ${volumeId}...`
+      );
+      runtime.requiresPostScanReconciliation = false;
+      await this.reconcileVolumeFull(volumeId);
+      return;
+    }
+
     if (buffered.length > 0) {
       console.log(
         `[QuickFind:SyncService] Replaying ${buffered.length} buffered changes collected during scan for volume ${volumeId}...`
@@ -267,6 +362,13 @@ export class SyncService extends EventEmitter {
       const db = DatabaseManager.getInstance().getDatabase();
       const processor = new ChangeProcessor(db);
       await processor.processBatch(volumeId, buffered, runtime.lastProcessedUsn);
+    }
+
+    // Capture latest USN checkpoint
+    const currentJournal = await UsnReader.queryJournal(runtime.driveLetter);
+    if (currentJournal) {
+      runtime.currentJournal = currentJournal;
+      runtime.lastProcessedUsn = currentJournal.nextUsn;
     }
 
     runtime.syncStatus = 'synced';
@@ -295,9 +397,13 @@ export class SyncService extends EventEmitter {
     const runtime = this.runtimes.get(volumeId);
     if (!runtime) return;
 
-    // If an initial scan is actively running, buffer the events
+    // If an initial scan is actively running, buffer events with bound protection
     if (runtime.isScanning) {
-      runtime.scanEventBuffer.push(...changes);
+      if (runtime.scanEventBuffer.length < MAX_BUFFERED_EVENTS) {
+        runtime.scanEventBuffer.push(...changes);
+      } else {
+        runtime.requiresPostScanReconciliation = true;
+      }
       return;
     }
 
@@ -327,7 +433,101 @@ export class SyncService extends EventEmitter {
   }
 
   /**
-   * Performs targeted directory reconciliation against the SQLite database
+   * Performs full volume reconciliation by scanning the filesystem and reconciling the SQLite database.
+   * Guarantees total index consistency when USN journal history is lost or rolled over.
+   */
+  public async reconcileVolumeFull(volumeId: number): Promise<void> {
+    const db = DatabaseManager.getInstance().getDatabase();
+    const volRow = db.prepare('SELECT drive_letter FROM volumes WHERE id = ?').get(volumeId) as
+      { drive_letter: string } | undefined;
+
+    if (!volRow) return;
+
+    const runtime = this.runtimes.get(volumeId);
+    if (runtime) {
+      runtime.syncStatus = 'reconciling';
+      this.broadcastStatus(volumeId);
+    }
+
+    const driveLetter = volRow.drive_letter;
+    const rootPath = driveLetter.endsWith('\\') ? driveLetter : driveLetter + '\\';
+    console.log(`[QuickFind:SyncService] Full volume reconciliation running for ${driveLetter}...`);
+
+    const now = Date.now();
+    const sessionRes = db
+      .prepare(
+        `INSERT INTO indexing_sessions (volume_id, status, start_time, scanned_files, scanned_folders, error_count)
+         VALUES (?, 'running', ?, 0, 0, 0)`
+      )
+      .run(volumeId, now);
+
+    const sessionId = Number(sessionRes.lastInsertRowid);
+    const indexerDb = new IndexerDb(db.name);
+
+    try {
+      const scanResult = await FilesystemScanner.scan(rootPath, {
+        onBatch: items => {
+          indexerDb.saveBatch(volumeId, sessionId, items);
+        },
+        onProgress: (files, folders, errors) => {
+          indexerDb.updateSessionProgress(sessionId, files, folders, errors);
+        },
+        isCancelled: () => false,
+      });
+
+      indexerDb.completeSession(
+        sessionId,
+        volumeId,
+        scanResult.scannedFiles,
+        scanResult.scannedFolders,
+        scanResult.errors
+      );
+
+      const journalInfo = await UsnReader.queryJournal(driveLetter);
+
+      if (runtime) {
+        runtime.syncStatus = 'synced';
+        runtime.currentJournal = journalInfo;
+        runtime.lastProcessedUsn = journalInfo?.nextUsn || null;
+        runtime.lastSyncTimestamp = Date.now();
+        runtime.errorMessage = null;
+      }
+
+      this.saveCheckpoint(volumeId, {
+        volumeId,
+        journalId: journalInfo?.journalId || null,
+        firstUsn: journalInfo?.firstUsn || null,
+        nextUsn: journalInfo?.nextUsn || null,
+        lastProcessedUsn: journalInfo?.nextUsn || null,
+        syncMode: 'filesystem_watcher',
+        syncStatus: 'synced',
+        lastSyncTimestamp: Date.now(),
+        checkpointTimestamp: Date.now(),
+        errorMessage: null,
+      });
+
+      console.log(
+        `[QuickFind:SyncService] Full volume reconciliation completed successfully for ${driveLetter}.`
+      );
+      this.broadcastStatus(volumeId);
+    } catch (err) {
+      console.error(
+        `[QuickFind:SyncService] Full reconciliation failed for volume ${volumeId}:`,
+        err
+      );
+      indexerDb.failSession(sessionId, volumeId, err instanceof Error ? err.message : String(err));
+      if (runtime) {
+        runtime.syncStatus = 'error';
+        runtime.errorMessage = 'Reconciliation failed';
+        this.broadcastStatus(volumeId);
+      }
+    } finally {
+      indexerDb.close();
+    }
+  }
+
+  /**
+   * Performs targeted directory differential reconciliation against the SQLite database
    */
   public async reconcileDirectory(volumeId: number, targetDir: string): Promise<number> {
     const normDir = PathUtils.normalizePath(targetDir);
@@ -349,15 +549,16 @@ export class SyncService extends EventEmitter {
 
       const dbEntryNames = new Set(dbRows.map(r => r.name));
 
-      // 2. Identify deleted items (in DB but missing on disk)
+      // 2. Identify deleted items safely using substr() rather than SQL LIKE
       const toDelete = dbRows.filter(r => !diskEntryNames.has(r.name));
       if (toDelete.length > 0) {
         const deleteStmt = db.prepare(
-          'DELETE FROM entries WHERE volume_id = ? AND (path = ? OR path LIKE ? || "\\%")'
+          'DELETE FROM entries WHERE volume_id = ? AND (path = ? OR substr(path, 1, ?) = ?)'
         );
         const delTx = db.transaction(() => {
           for (const item of toDelete) {
-            deleteStmt.run(volumeId, item.path, item.path);
+            const prefix = item.path + '\\';
+            deleteStmt.run(volumeId, item.path, prefix.length, prefix);
           }
         });
         delTx();
@@ -394,39 +595,11 @@ export class SyncService extends EventEmitter {
   }
 
   /**
-   * Reconciles an entire volume by running targeted reconciliation on root and subdirectories
+   * Reconciles an entire volume
    */
   public async reconcileVolume(volumeId: number): Promise<number> {
-    const runtime = this.runtimes.get(volumeId);
-    if (!runtime) return 0;
-
-    runtime.syncStatus = 'reconciling';
-    this.broadcastStatus(volumeId);
-
-    const rootPath = runtime.driveLetter.endsWith('\\')
-      ? runtime.driveLetter
-      : runtime.driveLetter + '\\';
-    const reconciled = await this.reconcileDirectory(volumeId, rootPath);
-
-    runtime.syncStatus = 'synced';
-    runtime.lastSyncTimestamp = Date.now();
-    runtime.errorMessage = null;
-
-    this.saveCheckpoint(volumeId, {
-      volumeId,
-      journalId: runtime.currentJournal?.journalId || null,
-      firstUsn: runtime.currentJournal?.firstUsn || null,
-      nextUsn: runtime.currentJournal?.nextUsn || null,
-      lastProcessedUsn: runtime.lastProcessedUsn,
-      syncMode: runtime.syncMode,
-      syncStatus: 'synced',
-      lastSyncTimestamp: runtime.lastSyncTimestamp,
-      checkpointTimestamp: Date.now(),
-      errorMessage: null,
-    });
-
-    this.broadcastStatus(volumeId);
-    return reconciled;
+    await this.reconcileVolumeFull(volumeId);
+    return 1;
   }
 
   /**

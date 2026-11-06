@@ -240,4 +240,3 @@ export class FilesystemWatcher extends EventEmitter {
     }, backoffMs);
   }
 }
-

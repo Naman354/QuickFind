@@ -4,31 +4,43 @@ const UNIX_EPOCH_FILETIME = 116444736000000000n;
 
 /**
  * UsnParser
- * Binary parser for NTFS USN Change Journal records (USN_RECORD_V2 and USN_RECORD_V3)
+ * Binary parser for NTFS USN Change Journal records (USN_RECORD_V2, USN_RECORD_V3, and USN_RECORD_V4).
+ * Never silently discards unsupported records and preserves lossless 64-bit/128-bit identifiers.
  */
 export class UsnParser {
   /**
+   * Extracts the NextUsn (first 8 bytes) returned by FSCTL_READ_USN_JOURNAL
+   */
+  public static extractNextUsn(buffer: Buffer): string | null {
+    if (buffer.length >= 8) {
+      const nextUsn = buffer.readBigUInt64LE(0);
+      return '0x' + nextUsn.toString(16).padStart(16, '0');
+    }
+    return null;
+  }
+
+  /**
    * Parses raw buffer of USN records into structured UsnRecord array
    */
-  public static parseBuffer(buffer: Buffer): UsnRecord[] {
+  public static parseBuffer(buffer: Buffer, skipHeaderUsn: boolean = true): UsnRecord[] {
     const records: UsnRecord[] = [];
     let offset = 0;
 
-    // Buffer might start with NextUsn (8 bytes) if output from USN read structure
-    if (buffer.length >= 8 && buffer.readUInt32LE(0) === 0 && buffer.length > 8) {
+    // Output from FSCTL_READ_USN_JOURNAL begins with an 8-byte USN followed by USN_RECORDs
+    if (skipHeaderUsn && buffer.length >= 8) {
       offset = 8;
     }
 
     while (offset + 8 <= buffer.length) {
       const recordLength = buffer.readUInt32LE(offset);
 
-      // A recordLength of 0 indicates the end of the records in the buffer
+      // A recordLength of 0 indicates the end of valid records in the buffer
       if (recordLength === 0 || offset + recordLength > buffer.length) {
         break;
       }
 
       const majorVersion = buffer.readUInt16LE(offset + 4);
-      const _minorVersion = buffer.readUInt16LE(offset + 6);
+      const minorVersion = buffer.readUInt16LE(offset + 6);
 
       if (majorVersion === 2) {
         const record = this.parseRecordV2(buffer, offset, recordLength);
@@ -36,9 +48,31 @@ export class UsnParser {
       } else if (majorVersion === 3) {
         const record = this.parseRecordV3(buffer, offset, recordLength);
         if (record) records.push(record);
+      } else if (majorVersion === 4) {
+        const record = this.parseRecordV4(buffer, offset, recordLength);
+        if (record) records.push(record);
+      } else {
+        // Explicitly record unsupported record version instead of silently discarding
+        console.warn(
+          `[QuickFind:UsnParser] Encountered unsupported USN_RECORD version V${majorVersion}.${minorVersion} (length: ${recordLength} bytes at offset ${offset})`
+        );
+        records.push({
+          recordLength,
+          majorVersion,
+          minorVersion,
+          fileReferenceNumber: '0x0',
+          parentFileReferenceNumber: '0x0',
+          usn: '0x0',
+          timestamp: 0,
+          reason: 0,
+          reasonFlags: [],
+          fileAttributes: 0,
+          filename: '',
+          unsupportedVersion: majorVersion,
+        });
       }
 
-      // Advance by recordLength aligned to 8-byte boundary
+      // In Windows NTFS, each record is aligned to an 8-byte boundary
       const alignedLength = (recordLength + 7) & ~7;
       offset += alignedLength;
     }
@@ -47,7 +81,7 @@ export class UsnParser {
   }
 
   /**
-   * Parses USN_RECORD_V2 (64-bit File Reference Numbers)
+   * Parses USN_RECORD_V2 (Standard NTFS 64-bit File Reference Numbers)
    */
   private static parseRecordV2(
     buffer: Buffer,
@@ -94,7 +128,7 @@ export class UsnParser {
   }
 
   /**
-   * Parses USN_RECORD_V3 (128-bit File Reference Numbers, e.g. ReFS or newer NTFS)
+   * Parses USN_RECORD_V3 (128-bit File Reference Numbers, ReFS / modern NTFS)
    */
   private static parseRecordV3(
     buffer: Buffer,
@@ -149,6 +183,51 @@ export class UsnParser {
       reasonFlags: this.parseReasonFlags(reason),
       fileAttributes,
       filename,
+    };
+  }
+
+  /**
+   * Parses USN_RECORD_V4 (128-bit File Reference Numbers with Extent tracking, no filename)
+   */
+  private static parseRecordV4(
+    buffer: Buffer,
+    offset: number,
+    recordLength: number
+  ): UsnRecord | null {
+    if (recordLength < 64) return null;
+
+    const majorVersion = buffer.readUInt16LE(offset + 4);
+    const minorVersion = buffer.readUInt16LE(offset + 6);
+
+    const frnLow = buffer.readBigUInt64LE(offset + 8);
+    const frnHigh = buffer.readBigUInt64LE(offset + 16);
+    const parentFrnLow = buffer.readBigUInt64LE(offset + 24);
+    const parentFrnHigh = buffer.readBigUInt64LE(offset + 32);
+
+    const usn = buffer.readBigUInt64LE(offset + 40);
+    const reason = buffer.readUInt32LE(offset + 48);
+    const numberOfExtents = buffer.readUInt16LE(offset + 60);
+
+    const frnStr =
+      '0x' + frnHigh.toString(16).padStart(16, '0') + frnLow.toString(16).padStart(16, '0');
+    const parentFrnStr =
+      '0x' +
+      parentFrnHigh.toString(16).padStart(16, '0') +
+      parentFrnLow.toString(16).padStart(16, '0');
+
+    return {
+      recordLength,
+      majorVersion,
+      minorVersion,
+      fileReferenceNumber: frnStr,
+      parentFileReferenceNumber: parentFrnStr,
+      usn: '0x' + usn.toString(16).padStart(16, '0'),
+      timestamp: 0,
+      reason,
+      reasonFlags: this.parseReasonFlags(reason),
+      fileAttributes: 0,
+      filename: '', // USN_RECORD_V4 does not store filename
+      numberOfExtents,
     };
   }
 

@@ -50,12 +50,23 @@ export interface UsnRecord {
   reasonFlags: string[];
   fileAttributes: number;
   filename: string;
+  numberOfExtents?: number; // Present on USN_RECORD_V4
+  unsupportedVersion?: number;
 }
 
 export interface UsnReadResult {
   records: UsnRecord[];
   nextUsn: string;
   hasMore: boolean;
+  accessDenied?: boolean;
+  bytesRead?: number;
   error?: string;
 }
 
+export interface UsnCapability {
+  canQueryMetadata: boolean;
+  canReadRecords: boolean;
+  requiresElevation: boolean;
+  journalInfo: UsnJournalInfo | null;
+  error?: string;
+}

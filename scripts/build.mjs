@@ -42,7 +42,15 @@ async function build() {
     console.log('\nStep 3: Bundling Preload script...');
     await runCommand('npx', ['vite', 'build', '--config', 'vite.config.preload.mts']);
 
-    // 4. Verify build artifacts
+    // 4. Copy native driver scripts
+    const nativeSrc = path.join(rootDir, 'src/main/indexing/sync/usn/nativeReadUsn.ps1');
+    const nativeDistDir = path.join(rootDir, 'dist/main/indexing/sync/usn');
+    if (fs.existsSync(nativeSrc)) {
+      fs.mkdirSync(nativeDistDir, { recursive: true });
+      fs.copyFileSync(nativeSrc, path.join(nativeDistDir, 'nativeReadUsn.ps1'));
+    }
+
+    // 5. Verify build artifacts
     const mainJs = path.join(rootDir, 'dist/main/index.js');
     const workerJs = path.join(rootDir, 'dist/main/indexing/worker/indexingWorker.js');
     const preloadJs = path.join(rootDir, 'dist/preload/index.js');
