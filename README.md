@@ -21,9 +21,9 @@ QuickFind is engineered around three logically independent components with stric
                │                              │
 ┌──────────────▼──────────────┐┌──────────────▼───────────────┐
 │       Indexing Engine       ││        Search Engine         │
-│  Filesystem scanning &      ││  Query parsing, ranking,     │
-│  metadata change tracking   ││  filtering & FTS5 matching   │
-│  (Worker Thread • Bounded)  ││  (Milestone 3 - FTS5)        │
+│  Filesystem scanning &      ││  FTS5 Trigram Matching,      │
+│  metadata change tracking   ││  B-tree fallback, ranking    │
+│  (Worker Thread • Bounded)  ││  (Sub-millisecond queries)   │
 └──────────────┬──────────────┘└──────────────┬───────────────┘
                │                              │
                └──────────────┬───────────────┘
@@ -37,7 +37,7 @@ QuickFind is engineered around three logically independent components with stric
 
 ### 1. Desktop Interface
 - **Framework**: React 19 + Vite.
-- **Role**: Search user interface and volume indexing progress display.
+- **Role**: Search user interface, volume indexing dashboard, and real-time query test panel.
 - **Security**: Runs in an isolated renderer sandbox (`contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`).
 - **Communication**: Interacts with backend services exclusively through a typed context bridge (`window.quickFindApi`).
 
@@ -48,8 +48,16 @@ QuickFind is engineered around three logically independent components with stric
 - **Stale Record Safety**: Old records are pruned only upon a completely successful full volume scan; failed or interrupted scans preserve previously indexed data intact.
 
 ### 3. Search Engine
-- **Role**: Query processing, token matching, ranking, and filtering (to be implemented in Milestone 3).
-- **Design**: Implemented behind the `ISearchEngine` facade interface (`src/main/search/`), prepared for full-text queries powered by SQLite FTS5.
+- **Role**: High-speed, accurate retrieval of files and folders from the SQLite index.
+- **FTS5 Trigram Matching**: Utilizes an FTS5 virtual table with the `trigram` tokenizer (`entries_fts`) for partial, substring, and case-insensitive filename/path matching.
+- **Short-Query Fallback**: Automatically falls back to B-tree indexed searches (`idx_entries_name_nocase`, `idx_entries_ext_nocase`) for queries with fewer than 3 characters (`c`, `ts`, `.h`).
+- **Ranked Prioritization**:
+  1. Exact filename matches (`lower(name) = lower(term)`).
+  2. Filename prefix matches (`name LIKE term || '%'`).
+  3. Filename substring matches (`name LIKE '%' || term || '%'`).
+  4. Exact folder name matches (`is_directory = 1 AND lower(name) = lower(term)`).
+  5. Folder/path substring matches (`path LIKE '%' || term || '%'`).
+- **Performance**: Sub-millisecond to low single-digit millisecond query execution times across tens of thousands of entries.
 
 ### 4. Database Foundation
 - **Storage Location**: Electron's `app.getPath('userData')` directory (`%APPDATA%/quickfind/quickfind.db` on Windows). Never written into source directories.
@@ -71,7 +79,7 @@ The database schema is managed via an automated schema-versioning migration runn
 
 ### Tables
 
-#### `volumes`
+#### `volumes` (Migration 1)
 Stores local drive information, volume identifiers, capacity, and indexing state:
 ```sql
 CREATE TABLE IF NOT EXISTS volumes (
@@ -82,14 +90,14 @@ CREATE TABLE IF NOT EXISTS volumes (
   file_system TEXT NOT NULL DEFAULT 'NTFS',
   total_bytes INTEGER NOT NULL DEFAULT 0,
   free_bytes INTEGER NOT NULL DEFAULT 0,
-  indexing_state TEXT NOT NULL DEFAULT 'unindexed', -- 'unindexed' | 'indexing' | 'indexed' | 'error'
+  indexing_state TEXT NOT NULL DEFAULT 'unindexed',
   last_scan_id INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
 ```
 
-#### `indexing_sessions`
+#### `indexing_sessions` (Migration 1)
 Tracks scanning sessions, timestamps, item counts, and error logs:
 ```sql
 CREATE TABLE IF NOT EXISTS indexing_sessions (
@@ -105,7 +113,7 @@ CREATE TABLE IF NOT EXISTS indexing_sessions (
 );
 ```
 
-#### `entries`
+#### `entries` (Migration 1)
 Stores files and folders with absolute paths, parent paths, and metadata:
 ```sql
 CREATE TABLE IF NOT EXISTS entries (
@@ -129,20 +137,66 @@ CREATE TABLE IF NOT EXISTS entries (
 );
 ```
 
-#### Indexes
-- `idx_entries_volume_parent`: High-speed directory tree queries on `(volume_id, parent_path)`.
-- `idx_entries_name`: Fast name lookups on `name`.
-- `idx_entries_volume_ext`: Fast extension filtering on `(volume_id, extension)`.
-- `idx_entries_volume_scan`: Enables instantaneous stale record identification on `(volume_id, scan_id)`.
-- `idx_entries_is_dir`: Fast filtering for directories vs files.
-- `idx_sessions_volume`: Session history lookup per volume.
+#### `entries_fts` (Migration 2)
+External content FTS5 virtual table with the trigram tokenizer for indexed substring matching:
+```sql
+CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
+  name,
+  path,
+  content='entries',
+  content_rowid='id',
+  tokenize='trigram'
+);
+
+-- Real-time synchronization triggers
+CREATE TRIGGER IF NOT EXISTS entries_fts_ai AFTER INSERT ON entries BEGIN
+  INSERT INTO entries_fts(rowid, name, path) VALUES (new.id, new.name, new.path);
+END;
+
+CREATE TRIGGER IF NOT EXISTS entries_fts_ad AFTER DELETE ON entries BEGIN
+  INSERT INTO entries_fts(entries_fts, rowid, name, path) VALUES ('delete', old.id, old.name, old.path);
+END;
+
+CREATE TRIGGER IF NOT EXISTS entries_fts_au AFTER UPDATE ON entries BEGIN
+  INSERT INTO entries_fts(entries_fts, rowid, name, path) VALUES ('delete', old.id, old.name, old.path);
+  INSERT INTO entries_fts(rowid, name, path) VALUES (new.id, new.name, new.path);
+END;
+
+-- Case-insensitive B-tree indexes for exact and prefix queries
+CREATE INDEX IF NOT EXISTS idx_entries_name_nocase ON entries (name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_entries_ext_nocase ON entries (extension COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_entries_path_nocase ON entries (path COLLATE NOCASE);
+```
+
+#### `volume_checkpoints` (Migration 3)
+Persists per-volume synchronization checkpoints, USN Journal tracking, and active monitoring mode:
+```sql
+CREATE TABLE IF NOT EXISTS volume_checkpoints (
+  volume_id INTEGER PRIMARY KEY REFERENCES volumes(id) ON DELETE CASCADE,
+  journal_id TEXT,                         -- 64-bit hex string (e.g. '0x01d9c3c0627e36af')
+  first_usn TEXT,                          -- 64-bit hex string
+  next_usn TEXT,                           -- 64-bit hex string
+  last_processed_usn TEXT,                 -- Last processed USN checkpoint
+  sync_mode TEXT NOT NULL DEFAULT 'filesystem_watcher', -- 'usn_journal' | 'filesystem_watcher' | 'reconciling'
+  sync_status TEXT NOT NULL DEFAULT 'out_of_sync',      -- 'synced' | 'syncing' | 'reconciling' | 'out_of_sync' | 'error'
+  last_sync_timestamp INTEGER,
+  checkpoint_timestamp INTEGER NOT NULL,
+  error_message TEXT
+);
+
+-- Fast lookup indexes for NTFS file reference numbers and parent references
+CREATE INDEX IF NOT EXISTS idx_entries_volume_frn ON entries (volume_id, file_reference_number);
+CREATE INDEX IF NOT EXISTS idx_entries_volume_parent_frn ON entries (volume_id, parent_reference_number);
+CREATE INDEX IF NOT EXISTS idx_checkpoints_status ON volume_checkpoints (sync_status);
+```
 
 ---
 
-## Indexing Lifecycle & Controlled IPC API
+## Controlled IPC API
 
-The renderer interacts with the indexing engine through `window.quickFindApi.indexing`:
+The renderer interacts with backend engines through typed channels on `window.quickFindApi`:
 
+### Indexing API (`window.quickFindApi.indexing`)
 | Method | Return Type | Description |
 | :--- | :--- | :--- |
 | `getVolumes()` | `Promise<IpcResponse<VolumeInfo[]>>` | Discovers local NTFS drives and returns their indexing state and entry counts. |
@@ -150,6 +204,18 @@ The renderer interacts with the indexing engine through `window.quickFindApi.ind
 | `startScan(volumeId)` | `Promise<IpcResponse<{ sessionId: number }>>` | Dispatches background worker scan for the specified volume. |
 | `cancelScan()` | `Promise<IpcResponse<void>>` | Aborts the active scan gracefully. |
 | `onProgress(callback)` | `() => void` | Subscribes to real-time progress updates (items/sec, current path, files, folders, errors). |
+
+### Search API (`window.quickFindApi.search`)
+| Method | Return Type | Description |
+| :--- | :--- | :--- |
+| `search(query: SearchQuery)` | `Promise<IpcResponse<SearchResults>>` | Executes ranked search query across filenames and paths with optional filters and pagination. |
+
+### Synchronization API (`window.quickFindApi.sync`)
+| Method | Return Type | Description |
+| :--- | :--- | :--- |
+| `getStatus()` | `Promise<IpcResponse<Record<number, VolumeCheckpoint>>>` | Retrieves persisted sync checkpoints, active mode, and sync status for all volumes. |
+| `reconcile(volumeId)` | `Promise<IpcResponse<{ volumeId: number; reconciledCount: number }>>` | Triggers targeted differential reconciliation against SQLite for the given volume. |
+| `onStatusUpdate(callback)` | `() => void` | Subscribes to real-time volume synchronization state changes and live change events. |
 
 ---
 
@@ -177,6 +243,7 @@ QuickFind/
     │   └── types/
     │       ├── indexing.ts      # VolumeInfo, IndexingSession, Entry models
     │       ├── ipc.ts           # Type-safe IPC request/response contracts
+    │       ├── search.ts        # SearchQuery, SearchResults, MatchType models
     │       ├── system.ts        # AppInfo, DatabaseStatus, SystemHealth models
     │       └── index.ts
     ├── preload/                 # Preload layer
@@ -196,14 +263,25 @@ QuickFind/
     │   │   ├── service.ts       # IndexingService coordinator & worker manager
     │   │   ├── types.ts         # IIndexingEngine contracts
     │   │   ├── volumeDiscovery.ts # Windows fixed NTFS volume discovery
-    │   │   ├── worker/          # Background worker thread
-    │   │   │   ├── indexerDb.ts # Worker-dedicated SQLite connection & batch transactions
+    │   │   ├── sync/                # Incremental synchronization & monitoring
+    │   │   │   ├── usn/             # NTFS USN Journal integration module
+    │   │   │   │   ├── usnTypes.ts  # Win32 USN constants, records, and types
+    │   │   │   │   ├── usnParser.ts # Binary parser for USN_RECORD_V2 & V3
+    │   │   │   │   └── usnReader.ts # Journal querying, validation & rollover detection
+    │   │   │   ├── watcher/         # Windows filesystem watcher
+    │   │   │   │   └── filesystemWatcher.ts # Recursive ReadDirectoryChangesW monitoring
+    │   │   │   ├── changeProcessor.ts # Batched, transactional SQLite mutations & child renames
+    │   │   │   ├── syncService.ts   # Sync coordinator & targeted differential reconciler
+    │   │   │   └── index.ts
+    │   │   ├── worker/              # Background worker thread
+    │   │   │   ├── indexerDb.ts     # Worker-dedicated SQLite connection & batch transactions
     │   │   │   ├── indexingWorker.ts # Worker entrypoint and event dispatch
-    │   │   │   └── scanner.ts   # Bounded concurrency directory queue scanner
+    │   │   │   └── scanner.ts       # Bounded concurrency directory queue scanner
     │   │   └── index.ts
     │   ├── search/              # Search Engine component
+    │   │   ├── queryBuilder.ts  # FTS5 & B-tree query generator, ranking, sanitization
+    │   │   ├── service.ts       # SearchService search implementation
     │   │   ├── types.ts         # ISearchEngine contracts
-    │   │   ├── service.ts       # SearchService facade
     │   │   └── index.ts
     │   ├── services/
     │   │   ├── appService.ts    # Application state & health aggregation
@@ -217,7 +295,7 @@ QuickFind/
     │       └── index.ts
     └── renderer/                # React 19 frontend
         ├── main.tsx             # React mount point
-        ├── App.tsx              # Indexing dashboard & volume manager
+        ├── App.tsx              # Dashboard & volume/search manager
         ├── App.css              # Dark theme styling
         ├── types/
         │   └── electron.d.ts    # Global window.quickFindApi typing
@@ -225,6 +303,7 @@ QuickFind/
             ├── Header.tsx       # Frameless titlebar & window controls
             ├── IndexingProgressCard.tsx # Live scan status, speed & cancellation
             ├── InfoCard.tsx     # System & database specification display
+            ├── SearchTester.tsx # Real-time search testing & results display
             ├── StatusBadge.tsx  # Health state indicator badge
             └── VolumeCard.tsx   # Local drive card with indexing action
 ```
@@ -281,12 +360,28 @@ npm run format
   - Secure sandboxed IPC bridge with sender frame validation and Content Security Policy.
 - **Milestone 2 (Complete)**: Database Schema & Initial Filesystem Indexing Engine
   - Database schema for `volumes`, `indexing_sessions`, `entries`, and performance indexes.
-  - 64-bit unsigned precision preservation for future NTFS USN Journal fields.
   - Automated schema migration runner.
   - Windows fixed NTFS volume discovery.
   - Bounded concurrency directory queue scanner skipping symbolic links and junctions.
-  - Offloaded background worker thread execution with dedicated SQLite batch transactions (20,000+ items/sec).
-  - Real-time progress reporting, safe cancellation, and stale record pruning on full scan completion.
-- **Milestone 3 (Next)**: Search Processing & Desktop Search Interface
-  - SQLite FTS5 query processing, matching, ranking, and filtering.
-  - Keyboard-driven desktop search UI.
+  - Offloaded background worker thread execution with dedicated SQLite batch transactions.
+- **Milestone 3 (Complete)**: Search Engine Implementation
+  - SQLite FTS5 virtual table with `trigram` tokenizer (`entries_fts`).
+  - Real-time synchronization triggers (`AFTER INSERT`, `AFTER DELETE`, `AFTER UPDATE`).
+  - B-tree fallback queries for short queries ($< 3$ characters).
+  - 5-tier ranking prioritization: Exact filename, Filename prefix, Filename substring, Exact folder, and Path matches.
+  - Extension and file/folder filtering with sub-millisecond execution times.
+  - Integration with Electron IPC and real-time dashboard query test panel.
+- **Milestone 4 (Complete)**: Incremental Indexing & Filesystem Synchronization
+  - Windows filesystem monitoring using `ReadDirectoryChangesW` via recursive directory watcher.
+  - Dedicated NTFS USN Change Journal parser supporting binary `USN_RECORD_V2` and `V3` (lossless 64-bit and 128-bit FRN and USN identifiers).
+  - Journal querying via `fsutil usn queryjournal`, checkpoint validation, and rollover / journal recreation detection.
+  - Non-destructive `Migration 3` with persistent `volume_checkpoints` and B-tree indexes for NTFS file reference numbers.
+  - Populating 64-bit NTFS file reference numbers (`ino`) and parent reference numbers directly in initial scanner.
+  - Transactional, idempotent `ChangeProcessor` handling creations, metadata updates, recursive subtree deletions, and directory renames with all descendant child path transformations.
+  - Targeted directory differential reconciliation avoiding full drive rescanning.
+  - Race condition buffering during initial volume scanning.
+  - Controlled Electron IPC endpoints (`quickfind:sync:getStatus`, `quickfind:sync:reconcile`, `quickfind:sync:statusUpdate`) and enriched volume dashboard UI.
+- **Milestone 5 (Next)**: Final Desktop Search Interface & System Tray
+  - Spotlight/Raycast-style floating search bar with hotkey activation (`Alt+Space` / `Ctrl+Space`).
+  - Native file opening and folder reveals in Windows Explorer (`shell.openPath`, `shell.showItemInFolder`).
+  - System tray icon and background controls.

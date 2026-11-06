@@ -5,7 +5,11 @@ import {
   VolumeInfo,
   IndexingStatus,
   IndexingProgressUpdate,
+  SearchQuery,
+  SearchResults,
   IpcResponse,
+  VolumeCheckpoint,
+  VolumeSyncStatusUpdate,
 } from '../shared/types';
 
 export interface QuickFindApi {
@@ -19,6 +23,14 @@ export interface QuickFindApi {
     cancelScan(): Promise<IpcResponse<void>>;
     onProgress(callback: (update: IndexingProgressUpdate) => void): () => void;
   };
+  sync: {
+    getStatus(): Promise<IpcResponse<Record<number, VolumeCheckpoint>>>;
+    reconcile(
+      volumeId: number
+    ): Promise<IpcResponse<{ volumeId: number; reconciledCount: number }>>;
+    onStatusUpdate(callback: (update: VolumeSyncStatusUpdate) => void): () => void;
+  };
+  search(query: SearchQuery): Promise<IpcResponse<SearchResults>>;
   window: {
     minimize(): Promise<IpcResponse<void>>;
     maximize(): Promise<IpcResponse<void>>;

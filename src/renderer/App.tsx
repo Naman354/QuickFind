@@ -4,6 +4,7 @@ import { StatusBadge } from './components/StatusBadge';
 import { InfoCard } from './components/InfoCard';
 import { VolumeCard } from './components/VolumeCard';
 import { IndexingProgressCard } from './components/IndexingProgressCard';
+import { SearchTester } from './components/SearchTester';
 import {
   AppInfo,
   DatabaseStatus,
@@ -94,8 +95,14 @@ export const App: React.FC = () => {
       }
     });
 
+    // Subscribe to incremental filesystem synchronization updates
+    const unsubSync = window.quickFindApi?.sync?.onStatusUpdate(() => {
+      refreshData();
+    });
+
     return () => {
       if (unsubscribe) unsubscribe();
+      if (unsubSync) unsubSync();
     };
   }, [refreshData]);
 
@@ -121,6 +128,21 @@ export const App: React.FC = () => {
     } catch (err) {
       console.error('[QuickFind:Renderer] Cancel error:', err);
       setIsCancelling(false);
+    }
+  };
+
+  const handleReconcileVolume = async (volumeId: number) => {
+    if (!window.quickFindApi) return;
+    try {
+      const res = await window.quickFindApi.sync.reconcile(volumeId);
+      if (res.success && res.data) {
+        console.log(
+          `[QuickFind:Renderer] Reconciled volume ${volumeId}: ${res.data.reconciledCount} items updated.`
+        );
+      }
+      refreshData();
+    } catch (err) {
+      console.error('[QuickFind:Renderer] Reconcile error:', err);
     }
   };
 
@@ -161,10 +183,10 @@ export const App: React.FC = () => {
                   </svg>
                 </div>
                 <div>
-                  <h1 className="hero-title">Filesystem Indexing Engine Active</h1>
+                  <h1 className="hero-title">Local Index & Search Engine Active</h1>
                   <p className="hero-subtitle">
-                    NTFS volume discovery, background worker scanning, and SQLite metadata
-                    persistence are operational.
+                    SQLite FTS5 Trigram full-text search, NTFS volume discovery, and background
+                    worker indexing are operational.
                   </p>
                 </div>
               </div>
@@ -216,6 +238,7 @@ export const App: React.FC = () => {
                       volume={vol}
                       isScanning={isScanning}
                       onStartIndexing={handleStartIndexing}
+                      onReconcileVolume={handleReconcileVolume}
                     />
                   ))
                 ) : (
@@ -223,6 +246,9 @@ export const App: React.FC = () => {
                 )}
               </div>
             </section>
+
+            {/* Interactive Search Engine Test Panel */}
+            <SearchTester />
 
             {/* Architecture Overview Cards */}
             <div className="cards-grid">
@@ -288,7 +314,11 @@ export const App: React.FC = () => {
                   },
                   { label: 'Concurrency Model', value: 'Bounded (8 Workers/Batch 2000)' },
                   { label: 'NTFS Reparse Points', value: 'Ignored (No recursion)' },
-                  { label: 'Search Engine Facade', value: 'Ready for Milestone 3' },
+                  {
+                    label: 'Search Engine',
+                    value: 'Active (FTS5 Trigram & Ranked Query Engine)',
+                    highlight: true,
+                  },
                 ]}
               />
 
@@ -313,11 +343,9 @@ export const App: React.FC = () => {
             </div>
 
             <footer className="footer-note">
-              <span>
-                QuickFind Milestone 2 Complete: Database Schema & Filesystem Indexing Engine
-              </span>
+              <span>QuickFind Milestone 3 Complete: SQLite FTS5 Trigram Search Engine Active</span>
               <span>•</span>
-              <span>Next Milestone: FTS5 Query Processing & Desktop Search Interface</span>
+              <span>Next Milestone: Keyboard-Driven Desktop Search Interface</span>
             </footer>
           </div>
         )}

@@ -79,9 +79,9 @@ export class AppService {
           details: 'NTFS volume discovery & worker indexing active',
         },
         {
-          name: 'Search Engine Facade',
-          state: 'healthy',
-          details: 'Ready for Milestone 3',
+          name: 'Search Engine (FTS5 Trigram & Ranked Query Engine)',
+          state: isDbHealthy ? 'healthy' : 'degraded',
+          details: 'FTS5 trigram inverted index & B-tree short query fallback active',
         },
       ],
       timestamp: Date.now(),
@@ -93,6 +93,13 @@ export class AppService {
    */
   public getIndexingService(): IndexingService {
     return this.indexingService;
+  }
+
+  /**
+   * Returns the SearchService instance
+   */
+  public getSearchService(): SearchService {
+    return this.searchService;
   }
 
   /**

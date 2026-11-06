@@ -4,10 +4,13 @@ import { IIndexingEngine } from './types';
 import { VolumeDiscovery } from './volumeDiscovery';
 import { DatabaseManager } from '../database';
 import { getAppConfig } from '../config/appConfig';
+import { SyncService } from './sync/syncService';
 import {
   GlobalIndexingState,
   IndexingProgressUpdate,
   IndexingStatus,
+  SyncMode,
+  SyncStatus,
   VolumeInfo,
   VolumeIndexingState,
 } from '../../shared/types';
@@ -24,6 +27,15 @@ interface VolumeDbRow {
   last_scan_id: number | null;
   last_scan_timestamp: number | null;
   entry_count: number;
+  journal_id?: string | null;
+  first_usn?: string | null;
+  next_usn?: string | null;
+  last_processed_usn?: string | null;
+  sync_mode?: SyncMode | null;
+  sync_status?: SyncStatus | null;
+  last_sync_timestamp?: number | null;
+  checkpoint_timestamp?: number | null;
+  error_message?: string | null;
 }
 
 export class IndexingService implements IIndexingEngine {
@@ -53,6 +65,8 @@ export class IndexingService implements IIndexingEngine {
     try {
       console.log('[QuickFind:IndexingService] Discovering NTFS volumes...');
       await this.discoverAndSyncVolumes();
+      // Initialize incremental synchronization and filesystem monitoring
+      await SyncService.getInstance().initialize();
     } catch (err) {
       console.error('[QuickFind:IndexingService] Initial volume discovery failed:', err);
     }
@@ -113,8 +127,11 @@ export class IndexingService implements IIndexingEngine {
         SELECT
           v.*,
           (SELECT COUNT(*) FROM entries e WHERE e.volume_id = v.id) as entry_count,
-          (SELECT s.start_time FROM indexing_sessions s WHERE s.id = v.last_scan_id) as last_scan_timestamp
+          (SELECT s.start_time FROM indexing_sessions s WHERE s.id = v.last_scan_id) as last_scan_timestamp,
+          c.journal_id, c.first_usn, c.next_usn, c.last_processed_usn,
+          c.sync_mode, c.sync_status, c.last_sync_timestamp, c.checkpoint_timestamp, c.error_message
         FROM volumes v
+        LEFT JOIN volume_checkpoints c ON c.volume_id = v.id
         ORDER BY v.drive_letter ASC;
       `
       )
@@ -132,6 +149,20 @@ export class IndexingService implements IIndexingEngine {
       lastScanId: r.last_scan_id,
       lastScanTimestamp: r.last_scan_timestamp,
       entryCount: r.entry_count,
+      checkpoint: r.sync_status
+        ? {
+            volumeId: r.id,
+            journalId: r.journal_id || null,
+            firstUsn: r.first_usn || null,
+            nextUsn: r.next_usn || null,
+            lastProcessedUsn: r.last_processed_usn || null,
+            syncMode: r.sync_mode || 'filesystem_watcher',
+            syncStatus: r.sync_status || 'out_of_sync',
+            lastSyncTimestamp: r.last_sync_timestamp || null,
+            checkpointTimestamp: r.checkpoint_timestamp || Date.now(),
+            errorMessage: r.error_message || null,
+          }
+        : null,
     }));
   }
 
@@ -180,7 +211,10 @@ export class IndexingService implements IIndexingEngine {
 
     const rootPath = volume.drive_letter + '\\';
 
-    // 3. Spawn background worker thread
+    // 3. Prepare sync service to buffer filesystem events during scan (race condition protection)
+    await SyncService.getInstance().prepareVolumeForScan(volumeId, volume.drive_letter);
+
+    // 4. Spawn background worker thread
     const workerPath = path.join(__dirname, 'worker/indexingWorker.js');
     console.log(`[QuickFind:IndexingService] Spawning indexing worker: ${workerPath}`);
 
@@ -238,6 +272,16 @@ export class IndexingService implements IIndexingEngine {
           this.state = 'idle';
           this.activeProgress = null;
           this.broadcastProgress(update);
+
+          // Replay buffered events collected during scan and transition volume to live sync
+          SyncService.getInstance()
+            .finalizeVolumeScan(volumeId)
+            .catch(err => {
+              console.error(
+                '[QuickFind:IndexingService] Error finalizing volume scan in sync service:',
+                err
+              );
+            });
         } else if (msg.type === 'CANCELLED') {
           console.log(`[QuickFind:IndexingService] Scan cancelled for ${volume.drive_letter}`);
           const update: IndexingProgressUpdate = {
@@ -256,6 +300,16 @@ export class IndexingService implements IIndexingEngine {
           this.state = 'idle';
           this.activeProgress = null;
           this.broadcastProgress(update);
+
+          // Replay buffered events collected during scan and transition volume to live sync
+          SyncService.getInstance()
+            .finalizeVolumeScan(volumeId)
+            .catch(err => {
+              console.error(
+                '[QuickFind:IndexingService] Error finalizing volume scan in sync service:',
+                err
+              );
+            });
         } else if (msg.type === 'FAILED') {
           console.error(`[QuickFind:IndexingService] Scan failed: ${msg.error}`);
           this.lastError = msg.error || 'Unknown scan error';
@@ -388,6 +442,7 @@ export class IndexingService implements IIndexingEngine {
     console.log('[QuickFind:IndexingService] Disposing indexing service...');
     await this.cancelIndexing();
     this.cleanupWorker();
+    await SyncService.getInstance().dispose();
     this.state = 'idle';
   }
 }

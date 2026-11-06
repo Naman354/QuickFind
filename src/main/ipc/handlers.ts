@@ -2,6 +2,7 @@ import { ipcMain, BrowserWindow } from 'electron';
 import { IPC_CHANNELS } from '../../shared/constants';
 import { AppService } from '../services/appService';
 import { validateIpcSender } from '../security/validator';
+import { SyncService } from '../indexing/sync/syncService';
 import {
   GetAppInfoResponse,
   GetDatabaseStatusResponse,
@@ -10,7 +11,12 @@ import {
   GetIndexingStatusResponse,
   StartIndexingResponse,
   CancelIndexingResponse,
+  GetSearchResponse,
+  SearchQuery,
   WindowActionResponse,
+  GetSyncStatusResponse,
+  ReconcileVolumeResponse,
+  VolumeSyncStatusUpdate,
 } from '../../shared/types';
 
 export function registerIpcHandlers(
@@ -19,12 +25,22 @@ export function registerIpcHandlers(
 ): void {
   const appService = AppService.getInstance();
   const indexingService = appService.getIndexingService();
+  const searchService = appService.getSearchService();
+  const syncService = SyncService.getInstance();
 
   // Forward indexing worker progress updates to renderer window
   indexingService.onProgress(update => {
     const win = getMainWindow();
     if (win && !win.isDestroyed()) {
       win.webContents.send(IPC_CHANNELS.INDEXING.PROGRESS_UPDATE, update);
+    }
+  });
+
+  // Forward incremental sync status updates to renderer window
+  syncService.on('statusUpdate', (update: VolumeSyncStatusUpdate) => {
+    const win = getMainWindow();
+    if (win && !win.isDestroyed()) {
+      win.webContents.send(IPC_CHANNELS.SYNC.STATUS_UPDATE, update);
     }
   });
 
@@ -111,6 +127,38 @@ export function registerIpcHandlers(
     IPC_CHANNELS.INDEXING.CANCEL_SCAN,
     async (event): Promise<CancelIndexingResponse> => {
       return guard(event, () => indexingService.cancelIndexing());
+    }
+  );
+
+  // Sync: Get Status & Checkpoints
+  ipcMain.handle(IPC_CHANNELS.SYNC.GET_STATUS, async (event): Promise<GetSyncStatusResponse> => {
+    return guard(event, () => syncService.getCheckpoints());
+  });
+
+  // Sync: Reconcile Volume
+  ipcMain.handle(
+    IPC_CHANNELS.SYNC.RECONCILE,
+    async (event, volumeId: number): Promise<ReconcileVolumeResponse> => {
+      return guard(event, async () => {
+        if (typeof volumeId !== 'number' || isNaN(volumeId)) {
+          throw new Error('Invalid volumeId parameter provided');
+        }
+        const reconciledCount = await syncService.reconcileVolume(volumeId);
+        return { volumeId, reconciledCount };
+      });
+    }
+  );
+
+  // Search: Execute Query
+  ipcMain.handle(
+    IPC_CHANNELS.SEARCH.EXECUTE,
+    async (event, query: SearchQuery): Promise<GetSearchResponse> => {
+      return guard(event, () => {
+        if (!query || typeof query !== 'object') {
+          throw new Error('Invalid query payload provided');
+        }
+        return searchService.search(query);
+      });
     }
   );
 

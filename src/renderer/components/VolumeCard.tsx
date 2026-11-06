@@ -6,9 +6,15 @@ interface VolumeCardProps {
   volume: VolumeInfo;
   isScanning: boolean;
   onStartIndexing: (volumeId: number) => void;
+  onReconcileVolume?: (volumeId: number) => void;
 }
 
-export const VolumeCard: React.FC<VolumeCardProps> = ({ volume, isScanning, onStartIndexing }) => {
+export const VolumeCard: React.FC<VolumeCardProps> = ({
+  volume,
+  isScanning,
+  onStartIndexing,
+  onReconcileVolume,
+}) => {
   const formatBytes = (bytes: number): string => {
     if (bytes === 0) return '0 GB';
     const gb = bytes / (1024 * 1024 * 1024);
@@ -18,8 +24,11 @@ export const VolumeCard: React.FC<VolumeCardProps> = ({ volume, isScanning, onSt
   const getBadgeStatus = (state: string): 'healthy' | 'degraded' | 'error' | 'pending' => {
     switch (state) {
       case 'indexed':
+      case 'synced':
         return 'healthy';
       case 'indexing':
+      case 'syncing':
+      case 'reconciling':
         return 'pending';
       case 'error':
         return 'error';
@@ -27,6 +36,9 @@ export const VolumeCard: React.FC<VolumeCardProps> = ({ volume, isScanning, onSt
         return 'degraded';
     }
   };
+
+  const checkpoint = volume.checkpoint;
+  const isSyncActive = checkpoint && volume.indexingState === 'indexed';
 
   return (
     <div className={`volume-card ${volume.indexingState === 'indexing' ? 'volume-active' : ''}`}>
@@ -51,10 +63,20 @@ export const VolumeCard: React.FC<VolumeCardProps> = ({ volume, isScanning, onSt
           </div>
           <span className="volume-fs">{volume.fileSystem} Local Fixed Disk</span>
         </div>
-        <StatusBadge
-          status={getBadgeStatus(volume.indexingState)}
-          label={volume.indexingState.toUpperCase()}
-        />
+        <div
+          style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'flex-end' }}
+        >
+          <StatusBadge
+            status={getBadgeStatus(volume.indexingState)}
+            label={volume.indexingState.toUpperCase()}
+          />
+          {isSyncActive && checkpoint && (
+            <StatusBadge
+              status={getBadgeStatus(checkpoint.syncStatus)}
+              label={`SYNC: ${checkpoint.syncStatus.toUpperCase()}`}
+            />
+          )}
+        </div>
       </div>
 
       <div className="volume-metrics">
@@ -74,9 +96,43 @@ export const VolumeCard: React.FC<VolumeCardProps> = ({ volume, isScanning, onSt
         </div>
       </div>
 
-      <div className="volume-actions">
+      {isSyncActive && checkpoint && (
+        <div className="volume-sync-info">
+          <div className="sync-info-row">
+            <span className="sync-info-label">Monitoring Mode:</span>
+            <span className="sync-info-val">
+              {checkpoint.syncMode === 'usn_journal'
+                ? 'NTFS USN Change Journal'
+                : 'Live Watcher (ReadDirectoryChangesW)'}
+            </span>
+          </div>
+          {checkpoint.lastProcessedUsn && (
+            <div className="sync-info-row">
+              <span className="sync-info-label">Last USN:</span>
+              <span className="sync-info-val mono">{checkpoint.lastProcessedUsn}</span>
+            </div>
+          )}
+          {checkpoint.lastSyncTimestamp && (
+            <div className="sync-info-row">
+              <span className="sync-info-label">Last Synced:</span>
+              <span className="sync-info-val">
+                {new Date(checkpoint.lastSyncTimestamp).toLocaleTimeString()}
+              </span>
+            </div>
+          )}
+          {checkpoint.errorMessage && (
+            <div className="sync-info-row sync-error">
+              <span className="sync-info-label">Sync Alert:</span>
+              <span className="sync-info-val">{checkpoint.errorMessage}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="volume-actions" style={{ display: 'flex', gap: '8px' }}>
         <button
           className="btn btn-primary"
+          style={{ flex: 1 }}
           disabled={isScanning}
           onClick={() => onStartIndexing(volume.id)}
         >
@@ -90,6 +146,17 @@ export const VolumeCard: React.FC<VolumeCardProps> = ({ volume, isScanning, onSt
             'Index Volume'
           )}
         </button>
+
+        {volume.indexingState === 'indexed' && onReconcileVolume && (
+          <button
+            className="btn btn-secondary"
+            disabled={isScanning || checkpoint?.syncStatus === 'reconciling'}
+            onClick={() => onReconcileVolume(volume.id)}
+            title="Perform targeted directory differential reconciliation against SQLite"
+          >
+            {checkpoint?.syncStatus === 'reconciling' ? 'Reconciling...' : 'Reconcile'}
+          </button>
+        )}
       </div>
     </div>
   );

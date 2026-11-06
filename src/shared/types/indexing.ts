@@ -4,6 +4,22 @@
 
 export type VolumeIndexingState = 'unindexed' | 'indexing' | 'indexed' | 'error';
 
+export type SyncMode = 'usn_journal' | 'filesystem_watcher' | 'reconciling';
+export type SyncStatus = 'synced' | 'syncing' | 'reconciling' | 'out_of_sync' | 'error';
+
+export interface VolumeCheckpoint {
+  volumeId: number;
+  journalId: string | null;
+  firstUsn: string | null;
+  nextUsn: string | null;
+  lastProcessedUsn: string | null;
+  syncMode: SyncMode;
+  syncStatus: SyncStatus;
+  lastSyncTimestamp: number | null;
+  checkpointTimestamp: number;
+  errorMessage?: string | null;
+}
+
 export interface VolumeInfo {
   id: number;
   driveLetter: string;
@@ -16,6 +32,7 @@ export interface VolumeInfo {
   lastScanId: number | null;
   lastScanTimestamp: number | null;
   entryCount?: number;
+  checkpoint?: VolumeCheckpoint | null;
 }
 
 export type SessionStatus = 'running' | 'completed' | 'failed' | 'cancelled';
@@ -81,3 +98,22 @@ export interface FileEntryItem {
   parentReferenceNumber?: string | null;
 }
 
+export interface VolumeSyncStatusUpdate {
+  volumeId: number;
+  driveLetter: string;
+  syncMode: SyncMode;
+  syncStatus: SyncStatus;
+  lastProcessedUsn: string | null;
+  lastSyncTimestamp: number | null;
+  errorMessage?: string | null;
+}
+
+export type FsChangeType = 'create' | 'update' | 'delete' | 'rename';
+
+export interface FsChangeEvent {
+  type: FsChangeType;
+  path: string;
+  oldPath?: string;
+  isDirectory?: boolean;
+  timestamp: number;
+}

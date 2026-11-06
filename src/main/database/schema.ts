@@ -1,6 +1,9 @@
 /**
  * Database Schema Definitions for QuickFind
+ * Milestone 1: Base Tables
  * Milestone 2: Filesystem Indexing Schema
+ * Milestone 3: FTS5 Trigram Search Infrastructure
+ * Milestone 4: Incremental Filesystem Synchronization & USN Checkpoints
  */
 
 export const SCHEMA_V1 = `
@@ -63,3 +66,53 @@ CREATE INDEX IF NOT EXISTS idx_sessions_volume ON indexing_sessions (volume_id);
 CREATE INDEX IF NOT EXISTS idx_volumes_drive ON volumes (drive_letter);
 `;
 
+export const SCHEMA_V2 = `
+-- FTS5 Virtual Table with trigram tokenizer for high-speed substring and path searching
+CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
+  name,
+  path,
+  content='entries',
+  content_rowid='id',
+  tokenize='trigram'
+);
+
+-- Real-time synchronization triggers between entries table and FTS5 index
+CREATE TRIGGER IF NOT EXISTS entries_fts_ai AFTER INSERT ON entries BEGIN
+  INSERT INTO entries_fts(rowid, name, path) VALUES (new.id, new.name, new.path);
+END;
+
+CREATE TRIGGER IF NOT EXISTS entries_fts_ad AFTER DELETE ON entries BEGIN
+  INSERT INTO entries_fts(entries_fts, rowid, name, path) VALUES ('delete', old.id, old.name, old.path);
+END;
+
+CREATE TRIGGER IF NOT EXISTS entries_fts_au AFTER UPDATE ON entries BEGIN
+  INSERT INTO entries_fts(entries_fts, rowid, name, path) VALUES ('delete', old.id, old.name, old.path);
+  INSERT INTO entries_fts(rowid, name, path) VALUES (new.id, new.name, new.path);
+END;
+
+-- Additional B-tree indexes for case-insensitive exact and prefix searches
+CREATE INDEX IF NOT EXISTS idx_entries_name_nocase ON entries (name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_entries_ext_nocase ON entries (extension COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_entries_path_nocase ON entries (path COLLATE NOCASE);
+`;
+
+export const SCHEMA_V3 = `
+-- Persistent volume synchronization checkpoints (USN journal / filesystem watcher)
+CREATE TABLE IF NOT EXISTS volume_checkpoints (
+  volume_id INTEGER PRIMARY KEY REFERENCES volumes(id) ON DELETE CASCADE,
+  journal_id TEXT,
+  first_usn TEXT,
+  next_usn TEXT,
+  last_processed_usn TEXT,
+  sync_mode TEXT NOT NULL DEFAULT 'filesystem_watcher', -- 'usn_journal' | 'filesystem_watcher' | 'reconciling'
+  sync_status TEXT NOT NULL DEFAULT 'out_of_sync',      -- 'synced' | 'syncing' | 'reconciling' | 'out_of_sync' | 'error'
+  last_sync_timestamp INTEGER,
+  checkpoint_timestamp INTEGER NOT NULL,
+  error_message TEXT
+);
+
+-- Fast lookup indexes for NTFS file reference numbers and parent references
+CREATE INDEX IF NOT EXISTS idx_entries_volume_frn ON entries (volume_id, file_reference_number);
+CREATE INDEX IF NOT EXISTS idx_entries_volume_parent_frn ON entries (volume_id, parent_reference_number);
+CREATE INDEX IF NOT EXISTS idx_checkpoints_status ON volume_checkpoints (sync_status);
+`;

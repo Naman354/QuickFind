@@ -50,6 +50,19 @@ export class FilesystemScanner {
     const dirQueue: string[] = [normalizedRoot];
     let activeWorkers = 0;
 
+    // Cache of directory path -> NTFS File Reference Number (FRN)
+    const dirFrnMap = new Map<string, string>();
+
+    // Seed root directory FRN if accessible
+    try {
+      const rootStat = await fs.promises.stat(PathUtils.toFsPath(normalizedRoot), { bigint: true });
+      if (rootStat.ino) {
+        dirFrnMap.set(normalizedRoot, '0x' + rootStat.ino.toString(16));
+      }
+    } catch {
+      // Root might have restricted permissions; will proceed without root FRN
+    }
+
     const maybeReportProgress = (currentPath: string, force = false) => {
       const now = Date.now();
       if (force || now - lastProgressTime >= INDEXING_CONFIG.PROGRESS_INTERVAL_MS) {
@@ -122,18 +135,28 @@ export class FilesystemScanner {
                 let sizeBytes = 0;
                 let createdAt = 0;
                 let modifiedAt = 0;
+                let fileRef: string | null = null;
 
-                // Stat entry for metadata
+                // Stat entry for metadata and NTFS 64-bit File Reference Number (ino)
                 try {
-                  const stat = await fs.promises.stat(PathUtils.toFsPath(itemPath));
-                  sizeBytes = stat.size;
-                  createdAt = Math.round(stat.birthtimeMs);
-                  modifiedAt = Math.round(stat.mtimeMs);
+                  const stat = await fs.promises.stat(PathUtils.toFsPath(itemPath), {
+                    bigint: true,
+                  });
+                  sizeBytes = Number(stat.size);
+                  createdAt = Math.round(Number(stat.birthtimeMs));
+                  modifiedAt = Math.round(Number(stat.mtimeMs));
+                  if (stat.ino) {
+                    fileRef = '0x' + stat.ino.toString(16);
+                    if (isDir) {
+                      dirFrnMap.set(itemPath, fileRef);
+                    }
+                  }
                 } catch {
                   // File might have been deleted, locked, or permission denied
                   errorCount++;
                 }
 
+                const parentRef = dirFrnMap.get(parentPath) || null;
                 const isHidden = entryName.startsWith('.') || (isRoot && entryName.startsWith('$'));
 
                 const entryItem: FileEntryItem = {
@@ -147,6 +170,8 @@ export class FilesystemScanner {
                   modifiedAt,
                   isHidden,
                   isSystem: false,
+                  fileReferenceNumber: fileRef,
+                  parentReferenceNumber: parentRef,
                 };
 
                 batchBuffer.push(entryItem);

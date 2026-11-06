@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import { IPC_CHANNELS } from '../shared/constants';
 import { QuickFindApi } from './api';
-import { IndexingProgressUpdate } from '../shared/types';
+import { IndexingProgressUpdate, SearchQuery, VolumeSyncStatusUpdate } from '../shared/types';
 
 const api: QuickFindApi = {
   getAppInfo: () => ipcRenderer.invoke(IPC_CHANNELS.SYSTEM.GET_INFO),
@@ -22,6 +22,20 @@ const api: QuickFindApi = {
       };
     },
   },
+  sync: {
+    getStatus: () => ipcRenderer.invoke(IPC_CHANNELS.SYNC.GET_STATUS),
+    reconcile: (volumeId: number) => ipcRenderer.invoke(IPC_CHANNELS.SYNC.RECONCILE, volumeId),
+    onStatusUpdate: (callback: (update: VolumeSyncStatusUpdate) => void) => {
+      const handler = (_event: IpcRendererEvent, update: VolumeSyncStatusUpdate) => {
+        callback(update);
+      };
+      ipcRenderer.on(IPC_CHANNELS.SYNC.STATUS_UPDATE, handler);
+      return () => {
+        ipcRenderer.removeListener(IPC_CHANNELS.SYNC.STATUS_UPDATE, handler);
+      };
+    },
+  },
+  search: (query: SearchQuery) => ipcRenderer.invoke(IPC_CHANNELS.SEARCH.EXECUTE, query),
   window: {
     minimize: () => ipcRenderer.invoke(IPC_CHANNELS.WINDOW.MINIMIZE),
     maximize: () => ipcRenderer.invoke(IPC_CHANNELS.WINDOW.MAXIMIZE),

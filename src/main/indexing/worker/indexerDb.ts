@@ -165,6 +165,22 @@ export class IndexerDb {
         `
         )
         .run(sessionId, now, volumeId);
+
+      // 4. Update volume checkpoint to synced
+      this.db
+        .prepare(
+          `
+          INSERT INTO volume_checkpoints (
+            volume_id, sync_mode, sync_status, checkpoint_timestamp, last_sync_timestamp
+          ) VALUES (?, 'filesystem_watcher', 'synced', ?, ?)
+          ON CONFLICT(volume_id) DO UPDATE SET
+            sync_status = 'synced',
+            last_sync_timestamp = excluded.last_sync_timestamp,
+            checkpoint_timestamp = excluded.checkpoint_timestamp,
+            error_message = NULL;
+        `
+        )
+        .run(volumeId, now, now);
     });
 
     completeTx();
@@ -221,4 +237,3 @@ export class IndexerDb {
     }
   }
 }
-

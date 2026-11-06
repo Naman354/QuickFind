@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { SCHEMA_V1 } from './schema';
+import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3 } from './schema';
 
 export interface Migration {
   version: number;
@@ -13,6 +13,47 @@ const MIGRATIONS: Migration[] = [
     name: 'initial_filesystem_indexing',
     up: (db: Database.Database) => {
       db.exec(SCHEMA_V1);
+    },
+  },
+  {
+    version: 2,
+    name: 'fts5_search_infrastructure',
+    up: (db: Database.Database) => {
+      db.exec(SCHEMA_V2);
+
+      // Populate FTS5 table with any pre-existing records in entries
+      try {
+        db.prepare(
+          `
+          INSERT OR IGNORE INTO entries_fts(rowid, name, path)
+          SELECT id, name, path FROM entries;
+        `
+        ).run();
+      } catch (err) {
+        console.warn('[QuickFind:Database] Initial FTS population note:', err);
+      }
+    },
+  },
+  {
+    version: 3,
+    name: 'incremental_synchronization_and_checkpoints',
+    up: (db: Database.Database) => {
+      db.exec(SCHEMA_V3);
+
+      // Initialize checkpoint records for any existing volumes
+      try {
+        db.prepare(
+          `
+          INSERT OR IGNORE INTO volume_checkpoints (
+            volume_id, sync_mode, sync_status, checkpoint_timestamp
+          )
+          SELECT id, 'filesystem_watcher', 'out_of_sync', ?
+          FROM volumes;
+        `
+        ).run(Date.now());
+      } catch (err) {
+        console.warn('[QuickFind:Database] Checkpoint initialization note:', err);
+      }
     },
   },
 ];

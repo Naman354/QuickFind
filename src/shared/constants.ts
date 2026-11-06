@@ -3,7 +3,7 @@
  */
 
 export const APP_NAME = 'QuickFind';
-export const APP_VERSION = '0.2.0';
+export const APP_VERSION = '0.4.0';
 
 /**
  * IPC Channel identifiers
@@ -22,6 +22,14 @@ export const IPC_CHANNELS = {
     START_SCAN: 'quickfind:indexing:startScan',
     CANCEL_SCAN: 'quickfind:indexing:cancelScan',
     PROGRESS_UPDATE: 'quickfind:indexing:progressUpdate',
+  },
+  SYNC: {
+    GET_STATUS: 'quickfind:sync:getStatus',
+    RECONCILE: 'quickfind:sync:reconcile',
+    STATUS_UPDATE: 'quickfind:sync:statusUpdate',
+  },
+  SEARCH: {
+    EXECUTE: 'quickfind:search:execute',
   },
   WINDOW: {
     MINIMIZE: 'quickfind:window:minimize',
@@ -61,4 +69,24 @@ export const INDEXING_CONFIG = {
     'swapfile.sys',
     'dumpstack.log.tmp',
   ]),
+} as const;
+
+/**
+ * Search Engine Defaults
+ */
+export const SEARCH_CONFIG = {
+  DEFAULT_LIMIT: 50,
+  MAX_LIMIT: 500,
+  TRIGRAM_MIN_LENGTH: 3,
+} as const;
+
+/**
+ * Filesystem Synchronization Defaults
+ */
+export const SYNC_CONFIG = {
+  DEBOUNCE_MS: 150,
+  BATCH_FLUSH_INTERVAL_MS: 500,
+  MAX_PENDING_CHANGES: 1000,
+  USN_READ_BATCH_SIZE: 1000,
+  MAX_RETRY_ATTEMPTS: 3,
 } as const;
