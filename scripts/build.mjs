@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { generateIcons } from './generate-icons.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,19 +31,23 @@ async function build() {
   console.log('=== QuickFind Production Build ===\n');
 
   try {
-    // 1. Build React renderer with Vite
-    console.log('Step 1: Building React Renderer...');
+    // 1. Generate Application Icons
+    console.log('Step 1: Generating Application Icons...');
+    generateIcons();
+
+    // 2. Build React renderer with Vite
+    console.log('\nStep 2: Building React Renderer...');
     await runCommand('npx', ['vite', 'build']);
 
-    // 2. Compile Main process with TypeScript (including worker threads)
-    console.log('\nStep 2: Compiling Electron Main process & Worker scripts...');
+    // 3. Compile Main process with TypeScript (including worker threads)
+    console.log('\nStep 3: Compiling Electron Main process & Worker scripts...');
     await runCommand('npx', ['tsc', '-p', 'tsconfig.node.json']);
 
-    // 3. Bundle Preload script with Vite (sandboxed, self-contained)
-    console.log('\nStep 3: Bundling Preload script...');
+    // 4. Bundle Preload script with Vite (sandboxed, self-contained)
+    console.log('\nStep 4: Bundling Preload script...');
     await runCommand('npx', ['vite', 'build', '--config', 'vite.config.preload.mts']);
 
-    // 4. Copy native driver scripts
+    // 5. Copy native driver scripts
     const nativeSrc = path.join(rootDir, 'src/main/indexing/sync/usn/nativeReadUsn.ps1');
     const nativeDistDir = path.join(rootDir, 'dist/main/indexing/sync/usn');
     if (fs.existsSync(nativeSrc)) {
@@ -50,7 +55,7 @@ async function build() {
       fs.copyFileSync(nativeSrc, path.join(nativeDistDir, 'nativeReadUsn.ps1'));
     }
 
-    // 5. Verify build artifacts
+    // 6. Verify build artifacts
     const mainJs = path.join(rootDir, 'dist/main/index.js');
     const workerJs = path.join(rootDir, 'dist/main/indexing/worker/indexingWorker.js');
     const preloadJs = path.join(rootDir, 'dist/preload/index.js');

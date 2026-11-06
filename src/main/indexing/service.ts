@@ -1,10 +1,12 @@
 import { Worker } from 'worker_threads';
+import fs from 'fs';
 import path from 'path';
 import { IIndexingEngine } from './types';
 import { VolumeDiscovery } from './volumeDiscovery';
 import { DatabaseManager } from '../database';
 import { getAppConfig } from '../config/appConfig';
 import { SyncService } from './sync/syncService';
+import { logger } from '../logger';
 import {
   GlobalIndexingState,
   IndexingProgressUpdate,
@@ -215,8 +217,13 @@ export class IndexingService implements IIndexingEngine {
     await SyncService.getInstance().prepareVolumeForScan(volumeId, volume.drive_letter);
 
     // 4. Spawn background worker thread
-    const workerPath = path.join(__dirname, 'worker/indexingWorker.js');
-    console.log(`[QuickFind:IndexingService] Spawning indexing worker: ${workerPath}`);
+    let workerPath = path.join(__dirname, 'worker/indexingWorker.js');
+    if (workerPath.includes('app.asar') && !fs.existsSync(workerPath)) {
+      const unpacked = workerPath.replace('app.asar', 'app.asar.unpacked');
+      if (fs.existsSync(unpacked)) workerPath = unpacked;
+    }
+
+    logger.info('IndexingService', `Spawning indexing worker: ${workerPath}`);
 
     this.worker = new Worker(workerPath);
 
@@ -312,6 +319,10 @@ export class IndexingService implements IIndexingEngine {
             });
         } else if (msg.type === 'FAILED') {
           console.error(`[QuickFind:IndexingService] Scan failed: ${msg.error}`);
+          logger.error(
+            'IndexingService',
+            `Scan failed for volume ${volume.drive_letter}: ${msg.error}`
+          );
           this.lastError = msg.error || 'Unknown scan error';
           this.cleanupWorker();
           this.state = 'error';
@@ -322,7 +333,7 @@ export class IndexingService implements IIndexingEngine {
 
     this.worker.on('error', (err: unknown) => {
       const errMsg = err instanceof Error ? err.message : String(err);
-      console.error('[QuickFind:IndexingService] Worker thread runtime error:', errMsg);
+      logger.error('IndexingService', 'Worker thread runtime error:', errMsg);
       this.lastError = errMsg;
       this.cleanupWorker();
       this.state = 'error';
@@ -330,7 +341,7 @@ export class IndexingService implements IIndexingEngine {
 
     this.worker.on('exit', code => {
       if (code !== 0 && this.state === 'indexing') {
-        console.warn(`[QuickFind:IndexingService] Worker stopped with exit code ${code}`);
+        logger.warn('IndexingService', `Worker stopped unexpectedly with exit code ${code}`);
         this.state = 'idle';
       }
     });

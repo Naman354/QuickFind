@@ -196,4 +196,3 @@ export function setWindowViewMode(win: BrowserWindow, mode: ViewMode): void {
     win.webContents.send(IPC_CHANNELS.WINDOW.FOCUS_INPUT);
   }
 }
-

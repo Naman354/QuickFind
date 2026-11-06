@@ -329,6 +329,17 @@ Builds the React renderer into `dist/renderer`, bundles the sandboxed preload sc
 npm run build
 ```
 
+### Packaging & Distribution
+QuickFind uses `electron-builder` configured for Windows x64 with prebuilt native N-API modules, extracted background workers, and dedicated PowerShell resources.
+
+```bash
+# Package into an unpacked portable directory (release/win-unpacked/QuickFind.exe)
+npm run package
+
+# Build the complete Windows NSIS installer (release/QuickFind Setup 0.1.0.exe)
+npm run dist
+```
+
 ### Type Checking
 Performs strict TypeScript validation across Node, Preload, and DOM targets:
 ```bash
@@ -349,6 +360,56 @@ npm run format:check
 # Format codebase with Prettier
 npm run format
 ```
+
+---
+
+## Production Installation & Running
+
+### 1. Windows Installer (NSIS)
+The production installer is located in the `release/` directory:
+- **Installer Executable**: `release/QuickFind Setup 0.1.0.exe` (~124 MB)
+- **Features**:
+  - Automatically creates Start Menu and Desktop shortcuts.
+  - Safe uninstallation: sets `deleteAppDataOnUninstall: false` so personal indexed databases and configuration are preserved unless manually deleted.
+  - No global Node.js or development dependencies required.
+
+### 2. Standalone Portable Folder
+If you prefer running QuickFind without installing:
+- **Folder**: `release/win-unpacked/`
+- **Executable**: `release/win-unpacked/QuickFind.exe`
+- Double-click `QuickFind.exe` to run immediately.
+
+### 3. Application Lifecycle & Single Instance
+- **Single-Instance Enforcement**: Only one instance of QuickFind can run at a time via Electron's `app.requestSingleInstanceLock()`. Launching a second instance focuses the existing floating window and exits the secondary process.
+- **Background Persistence**: Closing or clicking outside the floating search window hides it without terminating background services. Indexing, filesystem watchers, and USN synchronization continue seamlessly.
+- **Graceful Termination**: Right-click the system tray icon and select **Quit QuickFind** to cleanly checkpoint SQLite WAL pages, cancel worker threads, unhook watchers, and exit.
+
+---
+
+## Data Persistence & Logging
+
+### Database Storage
+- **Primary Path**: `%APPDATA%\QuickFind\quickfind.db`
+- **Fallback Compatibility**: Automatically adopts any existing database from `%APPDATA%\quickfind\quickfind.db`.
+- **Integrity on Exit**: On application shutdown, QuickFind executes `PRAGMA wal_checkpoint(TRUNCATE)` to flush all write-ahead log frames into the main database file.
+
+### Operational Logging
+- **Log Location**: `%APPDATA%\QuickFind\logs\quickfind.log`
+- **Log Rotation**: Automatically rotates to `quickfind.old.log` when the log size exceeds 5 MB to prevent disk bloat.
+- **Resilience**: Global handlers intercept `uncaughtException` and `unhandledRejection` to record stack traces to disk while preserving application stability.
+
+---
+
+## Windows Permissions & Security Architecture
+
+### Standard / Non-Elevated Execution (Default & Recommended)
+- QuickFind runs completely under standard non-elevated user permissions.
+- **Active Monitoring**: Full recursive directory monitoring across all local drives via Windows `ReadDirectoryChangesW`.
+- **Search & Indexing**: Sub-millisecond FTS5 search queries, volume scanning, and targeted differential reconciliation operate with zero administrative requirements.
+
+### Administrator Elevation (Optional)
+- **NTFS USN Journal Direct Sector Access**: Direct low-level reading of the NTFS USN Journal via `FSCTL_READ_USN_JOURNAL` on raw drive handles (e.g. `\\.\C:`) requires administrative privileges on Windows.
+- **Graceful Fallback**: When launched without elevation, QuickFind detects this capability boundary, logs the status, and automatically falls back to the low-latency filesystem watcher and differential reconciler. The application never forces UAC prompts or elevation on the user.
 
 ---
 
@@ -438,3 +499,11 @@ In Milestone 5, QuickFind transforms into a minimal, keyboard-first Windows desk
   - Keyboard-first result navigation (`ArrowUp/Down`, `Enter`, `Ctrl+Enter`, `Ctrl+Shift+C`, `Escape`).
   - Native file operations (`shell.openPath`, `shell.showItemInFolder`, `clipboard.writeText`) with stale file disk verification.
   - Dual-mode architecture seamlessly toggling between compact floating search bar and comprehensive volume management dashboard.
+- **Milestone 6 (Complete)**: Production Integration, Windows Packaging & Finalization
+  - Multi-resolution Windows application and tray icons (`icon.ico` and `icon.png` with 16, 32, 48, and 256px layers).
+  - Standalone NSIS installer (`release/QuickFind Setup 0.1.0.exe`) and portable unpacked directory (`release/win-unpacked/`).
+  - Proper ASAR unpacking for native `better-sqlite3` N-API binaries, worker threads, and `nativeReadUsn.ps1`.
+  - Non-destructive installer preserving user index and configuration (`deleteAppDataOnUninstall: false`).
+  - WAL database checkpointing (`wal_checkpoint(TRUNCATE)`) during safe shutdown sequence.
+  - Robust operational logging to `%APPDATA%\QuickFind\logs\quickfind.log` with automatic 5MB rotation.
+  - Electron single-instance enforcement, idle resource discipline, and full lifecycle resiliency.

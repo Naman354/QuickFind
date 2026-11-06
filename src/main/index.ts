@@ -1,8 +1,14 @@
 import { app } from 'electron';
+
+// Set application name early so userData path resolves to %APPDATA%\QuickFind
+app.name = 'QuickFind';
+
 import { getAppConfig } from './config/appConfig';
 import { AppService } from './services/appService';
 import { registerIpcHandlers } from './ipc/handlers';
 import { setupContentSecurityPolicy } from './security/csp';
+import { logger } from './logger';
+import { APP_VERSION } from '../shared/constants';
 import {
   createMainWindow,
   getMainWindow,
@@ -14,13 +20,29 @@ import {
 import { createTray, destroyTray } from './tray';
 import { registerGlobalShortcuts, unregisterGlobalShortcuts } from './shortcuts';
 
+// Ensure app configuration and userData resolution are established
+getAppConfig();
+
+// Initialize persistent file logging
+logger.initialize();
+
+// Safeguard against unhandled exceptions causing silent or unexpected termination
+process.on('uncaughtException', err => {
+  logger.error('Process', 'Uncaught exception encountered:', err);
+});
+
+process.on('unhandledRejection', reason => {
+  logger.error('Process', 'Unhandled promise rejection encountered:', reason);
+});
+
 // Single instance lock to prevent duplicate instances
 const hasLock = app.requestSingleInstanceLock();
 if (!hasLock) {
-  console.log('[QuickFind] Another instance is already running. Quitting.');
+  logger.info('App', 'Another instance is already running. Quitting.');
   app.quit();
 } else {
   app.on('second-instance', () => {
+    logger.info('App', 'Second instance attempt detected; summoning search window.');
     const win = getMainWindow();
     if (win) {
       showFloatingSearch(win);
@@ -29,14 +51,22 @@ if (!hasLock) {
 }
 
 function quitApplication(): void {
-  console.log('[QuickFind] User requested application quit via tray');
+  logger.info('App', 'User requested application quit via tray');
   setAppIsQuitting(true);
   app.quit();
 }
 
 async function initializeApp(): Promise<void> {
   const config = getAppConfig();
+  logger.initialize(config.userDataPath);
   const appService = AppService.getInstance();
+
+  logger.info(
+    'App',
+    `QuickFind starting (v${APP_VERSION}, Electron ${process.versions.electron}, Node ${process.versions.node}, arch: ${process.arch})`
+  );
+  logger.info('App', `UserData directory: ${config.userDataPath}`);
+  logger.info('App', `Database file: ${config.databasePath}`);
 
   // Setup Content Security Policy
   setupContentSecurityPolicy(config.isDev);
@@ -67,7 +97,7 @@ async function initializeApp(): Promise<void> {
         }
         setWindowViewMode(win, 'manage');
       } catch (err) {
-        console.error('[QuickFind] Failed to re-index all volumes:', err);
+        logger.error('App', 'Failed to re-index all volumes:', err);
       }
     },
     onQuit: () => {
@@ -85,7 +115,7 @@ app
   .whenReady()
   .then(initializeApp)
   .catch(err => {
-    console.error('[QuickFind] Fatal error during app initialization:', err);
+    logger.error('App', 'Fatal error during app initialization:', err);
     app.quit();
   });
 
@@ -106,13 +136,16 @@ app.on('before-quit', async event => {
   isShuttingDown = true;
   setAppIsQuitting(true);
 
+  logger.info('App', 'Application graceful shutdown initiated...');
+
   try {
     unregisterGlobalShortcuts();
     destroyTray();
     const appService = AppService.getInstance();
     await appService.shutdown();
+    logger.info('App', 'All services disposed cleanly. Exiting.');
   } catch (err) {
-    console.error('[QuickFind] Error during shutdown:', err);
+    logger.error('App', 'Error during shutdown:', err);
   } finally {
     app.exit(0);
   }

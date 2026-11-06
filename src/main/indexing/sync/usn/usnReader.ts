@@ -19,7 +19,32 @@ export class UsnReader {
    */
   private static getNativeScriptPath(): string {
     const distPath = path.join(__dirname, 'nativeReadUsn.ps1');
+
+    // Check app.asar.unpacked if inside an asar archive
+    if (distPath.includes('app.asar')) {
+      const unpackedPath = distPath.replace('app.asar', 'app.asar.unpacked');
+      if (fs.existsSync(unpackedPath)) return unpackedPath;
+    }
+
     if (fs.existsSync(distPath)) return distPath;
+
+    // Check Electron resources path for production packaging
+    if (process.resourcesPath) {
+      const resPath = path.join(process.resourcesPath, 'nativeReadUsn.ps1');
+      if (fs.existsSync(resPath)) return resPath;
+
+      const unpackedResPath = path.join(
+        process.resourcesPath,
+        'app.asar.unpacked',
+        'dist',
+        'main',
+        'indexing',
+        'sync',
+        'usn',
+        'nativeReadUsn.ps1'
+      );
+      if (fs.existsSync(unpackedResPath)) return unpackedResPath;
+    }
 
     const srcPath = path.join(
       process.cwd(),

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
+  "appId": "com.quickfind.desktop",
+  "productName": "QuickFind",
+  "copyright": "Copyright © 2026 QuickFind",
+  "directories": {
+    "output": "release",
+    "buildResources": "build"
+  },
+  "files": [
+    "dist/**/*",
+    "node_modules/**/*",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": "src/main/indexing/sync/usn/nativeReadUsn.ps1",
+      "to": "nativeReadUsn.ps1"
+    }
+  ],
+  "asar": true,
+  "asarUnpack": [
+    "**/node_modules/better-sqlite3/**",
+    "**/dist/main/indexing/sync/usn/nativeReadUsn.ps1",
+    "**/dist/main/indexing/worker/**"
+  ],
+  "npmRebuild": false,
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "build/icon.ico"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "QuickFind",
+    "uninstallDisplayName": "QuickFind",
+    "deleteAppDataOnUninstall": false
+  }
+}
+

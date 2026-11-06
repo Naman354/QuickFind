@@ -2,6 +2,7 @@ import { DatabaseManager } from '../database';
 import { ISearchEngine } from './types';
 import { SearchQueryBuilder } from './queryBuilder';
 import { SearchQuery, SearchResultItem, SearchResults } from '../../shared/types';
+import { logger } from '../logger';
 
 interface RawSearchRow {
   id: number;
@@ -94,7 +95,7 @@ export class SearchService implements ISearchEngine {
         strategy: plan.strategy,
       };
     } catch (err) {
-      console.error('[QuickFind:SearchService] Search execution failed:', err);
+      logger.error('SearchService', 'Search execution failed:', err);
       throw err;
     }
   }

@@ -4,6 +4,7 @@ import path from 'path';
 import { DatabaseStatus } from '../../shared/types';
 import { SQLITE_CONFIG } from '../../shared/constants';
 import { MigrationManager } from './migrations';
+import { logger } from '../logger';
 
 export class DatabaseManager {
   private static instance: DatabaseManager | null = null;
@@ -49,9 +50,9 @@ export class DatabaseManager {
       // Run database migrations
       MigrationManager.runMigrations(this.db);
 
-      console.log(`[QuickFind:Database] Successfully connected to SQLite at ${this.dbPath}`);
+      logger.info('Database', `Successfully connected to SQLite at ${this.dbPath}`);
     } catch (error) {
-      console.error('[QuickFind:Database] Initialization failed:', error);
+      logger.error('Database', 'Initialization failed:', error);
       throw error;
     }
   }
@@ -199,10 +200,16 @@ export class DatabaseManager {
   public close(): void {
     if (this.db && this.db.open) {
       try {
-        console.log('[QuickFind:Database] Closing SQLite connection...');
+        logger.info('Database', 'Checkpointing SQLite WAL before shutdown...');
+        try {
+          this.db.pragma('wal_checkpoint(TRUNCATE)');
+        } catch (e) {
+          logger.warn('Database', 'WAL checkpoint passive warning:', e);
+        }
+        logger.info('Database', 'Closing SQLite connection...');
         this.db.close();
       } catch (err) {
-        console.error('[QuickFind:Database] Error closing database:', err);
+        logger.error('Database', 'Error closing database:', err);
       } finally {
         this.db = null;
       }

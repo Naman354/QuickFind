@@ -1,5 +1,6 @@
 import { globalShortcut } from 'electron';
 import { GLOBAL_SHORTCUT_DEFAULT } from '../shared/constants';
+import { logger } from './logger';
 
 let isRegistered = false;
 
@@ -14,22 +15,18 @@ export function registerGlobalShortcuts(onToggle: () => void): boolean {
     });
 
     if (!success) {
-      console.warn(
-        `[QuickFind:Shortcuts] Failed to register global shortcut: ${GLOBAL_SHORTCUT_DEFAULT}. It might be reserved by another application.`
+      logger.warn(
+        'Shortcuts',
+        `Failed to register global shortcut: ${GLOBAL_SHORTCUT_DEFAULT}. It might be reserved by another application.`
       );
       return false;
     }
 
     isRegistered = true;
-    console.log(
-      `[QuickFind:Shortcuts] Successfully registered global shortcut: ${GLOBAL_SHORTCUT_DEFAULT}`
-    );
+    logger.info('Shortcuts', `Successfully registered global shortcut: ${GLOBAL_SHORTCUT_DEFAULT}`);
     return true;
   } catch (err) {
-    console.error(
-      `[QuickFind:Shortcuts] Error registering global shortcut ${GLOBAL_SHORTCUT_DEFAULT}:`,
-      err
-    );
+    logger.error('Shortcuts', `Error registering global shortcut ${GLOBAL_SHORTCUT_DEFAULT}:`, err);
     return false;
   }
 }
@@ -39,9 +36,9 @@ export function unregisterGlobalShortcuts(): void {
     try {
       globalShortcut.unregister(GLOBAL_SHORTCUT_DEFAULT);
       isRegistered = false;
-      console.log('[QuickFind:Shortcuts] Global shortcuts unregistered cleanly');
+      logger.info('Shortcuts', 'Global shortcuts unregistered cleanly');
     } catch (err) {
-      console.error('[QuickFind:Shortcuts] Error unregistering global shortcuts:', err);
+      logger.error('Shortcuts', 'Error unregistering global shortcuts:', err);
     }
   }
 }

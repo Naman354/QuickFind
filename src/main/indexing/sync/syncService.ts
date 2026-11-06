@@ -9,6 +9,7 @@ import { UsnJournalInfo } from './usn/usnTypes';
 import { FilesystemScanner } from '../worker/scanner';
 import { IndexerDb } from '../worker/indexerDb';
 import { PathUtils } from '../pathUtils';
+import { logger } from '../../logger';
 import {
   FsChangeEvent,
   SyncMode,
@@ -269,6 +270,7 @@ export class SyncService extends EventEmitter {
     });
 
     watcher.on('error', ({ error }: { error: string }) => {
+      logger.error('SyncService', `Filesystem monitor error on volume ${volumeId}: ${error}`);
       runtime.syncStatus = 'error';
       runtime.errorMessage = error;
       this.broadcastStatus(volumeId);

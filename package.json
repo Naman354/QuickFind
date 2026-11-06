@@ -13,7 +13,9 @@
     "lint:fix": "eslint src --fix",
     "format": "prettier --write \"src/**/*.{ts,tsx,css,json}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css,json}\"",
-    "rebuild": "electron-rebuild -f -w better-sqlite3"
+    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "package": "node scripts/build.mjs && electron-builder --win --dir",
+    "dist": "node scripts/build.mjs && electron-builder --win"
   },
   "keywords": [
     "file-search",
@@ -40,6 +42,7 @@
     "@vitejs/plugin-react": "^6.2.1",
     "cross-env": "^10.1.0",
     "electron": "^45.2.3",
+    "electron-builder": "^26.18.0",
     "eslint": "^9.39.5",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
